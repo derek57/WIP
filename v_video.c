@@ -23,6 +23,11 @@
 #include <string.h>
 #include <math.h>
 
+// [SVE] svillarreal
+#include "rb_draw.h"
+#include "rb_data.h"
+#include "doomstat.h"
+
 #include "i_system.h"
 
 #include "doomtype.h"
@@ -36,10 +41,16 @@
 #include "w_wad.h"
 #include "z_zone.h"
 
+// [SVE] svillarreal - use libpng
+#define HAVE_LIBPNG
+
 #include "config.h"
 #ifdef HAVE_LIBPNG
 #include <png.h>
 #endif
+
+// [SVE]: kerning data for big font
+#include "kerning.h"
 
 // TODO: There are separate RANGECHECK defines for different games, but this
 // is common code. Fix this.
@@ -67,7 +78,13 @@ static vpatchclipfunc_t patchclip_callback = NULL;
 // V_MarkRect 
 // 
 void V_MarkRect(int x, int y, int width, int height) 
-{ 
+{
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return;
+    }
+
     // If we are temporarily using an alternate screen, do not 
     // affect the update box.
 
@@ -88,6 +105,12 @@ void V_CopyRect(int srcx, int srcy, byte *source,
 { 
     byte *src;
     byte *dest; 
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return;
+    }
  
 #ifdef RANGECHECK 
     if (srcx < 0
@@ -154,6 +177,13 @@ void V_DrawPatch(int x, int y, patch_t *patch)
     {
         if(!patchclip_callback(patch, x, y))
             return;
+    }
+
+    // [SVE] svillarreal - blit patch on the patch buffer texture
+    if(use3drenderer)
+    {
+        RB_BlitPatch(x, y, patch, 0xff);
+        return;
     }
 
 #ifdef RANGECHECK
@@ -342,6 +372,13 @@ void V_DrawXlaPatch(int x, int y, patch_t * patch)
             return;
     }
 
+    // [SVE] svillarreal - blit patch on the patch buffer texture
+    if(use3drenderer)
+    {
+        RB_BlitPatch(x, y, patch, 0xC0);
+        return;
+    }
+
     col = 0;
     desttop = dest_screen + y * SCREENWIDTH + x;
 
@@ -492,7 +529,8 @@ void V_LoadTintTable(void)
 
 void V_LoadXlaTable(void)
 {
-    xlatab = W_CacheLumpName("XLATAB", PU_STATIC);
+    if(!xlatab) // [SVE]: once only
+        xlatab = W_CacheLumpName("XLATAB", PU_STATIC);
 }
 
 //
@@ -513,6 +551,13 @@ void V_DrawBlock(int x, int y, int width, int height, byte *src)
 	I_Error ("Bad V_DrawBlock");
     }
 #endif 
+
+    // [SVE] svillarreal - blit block on the buffer texture
+    if(use3drenderer)
+    {
+        RB_BlitBlock(x, y, width, height, src, 0xff);
+        return;
+    }
  
     V_MarkRect (x, y, width, height); 
  
@@ -528,10 +573,11 @@ void V_DrawBlock(int x, int y, int width, int height, byte *src)
 
 void V_DrawFilledBox(int x, int y, int w, int h, int c)
 {
-    uint8_t *buf, *buf1;
+    uint8_t *buf, *buf1, *data;
     int x1, y1;
 
-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
+    data = I_VideoBuffer + SCREENWIDTH * y + x;
+    buf = data;
 
     for (y1 = 0; y1 < h; ++y1)
     {
@@ -544,32 +590,55 @@ void V_DrawFilledBox(int x, int y, int w, int h, int c)
 
         buf += SCREENWIDTH;
     }
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_BlitBlock(x, y, w, h, data, 0xff);
+        return;
+    }
 }
 
 void V_DrawHorizLine(int x, int y, int w, int c)
 {
-    uint8_t *buf;
+    uint8_t *buf, *data;
     int x1;
 
-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
+    data = I_VideoBuffer + SCREENWIDTH * y + x;
+    buf = data;
 
     for (x1 = 0; x1 < w; ++x1)
     {
         *buf++ = c;
     }
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_BlitBlock(x, y, w, 1, data, 0xff);
+        return;
+    }
 }
 
 void V_DrawVertLine(int x, int y, int h, int c)
 {
-    uint8_t *buf;
+    uint8_t *buf, *data;
     int y1;
 
-    buf = I_VideoBuffer + SCREENWIDTH * y + x;
+    data = I_VideoBuffer + SCREENWIDTH * y + x;
+    buf = data;
 
     for (y1 = 0; y1 < h; ++y1)
     {
         *buf = c;
         buf += SCREENWIDTH;
+    }
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_BlitBlock(x, y, 1, h, data, 0xff);
+        return;
     }
 }
 
@@ -773,9 +842,9 @@ void WritePNGfile(char *filename, byte *data,
 
     png_write_info(ppng, pinfo);
 
-    for (i = 0; i < SCREENHEIGHT; i++)
+    for (i = 0; i < height; i++)
     {
-        png_write_row(ppng, data + i*SCREENWIDTH);
+        png_write_row(ppng, data + i*width);
     }
 
     png_write_end(ppng, pinfo);
@@ -783,6 +852,74 @@ void WritePNGfile(char *filename, byte *data,
     fclose(handle);
 }
 #endif
+
+//
+// WriteHiResPNG
+//
+
+static void WriteHiResPNG(char *filename, byte *data,
+                          const int width, const int height)
+{
+#ifdef HAVE_LIBPNG
+    png_structp     png_ptr;
+    png_infop       info_ptr;
+    int             i = 0;
+    int             j = 0;
+    FILE            *handle;
+
+    handle = fopen(filename, "wb");
+
+    if(!handle)
+    {
+        return;
+    }
+
+    // setup png pointer
+    png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, 0,
+                                      error_fn, warning_fn);
+    if(png_ptr == NULL)
+    {
+        fprintf(stderr, "Failed creating png_ptr");
+        return;
+    }
+
+    // setup info pointer
+    info_ptr = png_create_info_struct(png_ptr);
+    if(info_ptr == NULL)
+    {
+        png_destroy_write_struct(&png_ptr,  NULL);
+        fprintf(stderr, "Failed creating PNG info_ptr");
+        return;
+    }
+
+    png_init_io(png_ptr, handle);
+
+    // setup image
+    png_set_IHDR(
+        png_ptr,
+        info_ptr,
+        width,
+        height,
+        8,
+        PNG_COLOR_TYPE_RGB,
+        PNG_INTERLACE_NONE,
+        PNG_COMPRESSION_TYPE_BASE,
+        PNG_FILTER_TYPE_DEFAULT);
+
+    // add png info to data
+    png_write_info(png_ptr, info_ptr);
+
+    for(i = 0; i < height; ++i)
+    {
+        png_write_row(png_ptr, data + i * (width*3));
+    }
+
+    // cleanup
+    png_write_end(png_ptr, info_ptr);
+    png_destroy_write_struct(&png_ptr, &info_ptr);
+    fclose(handle);
+#endif
+}
 
 //
 // V_ScreenShot
@@ -798,7 +935,7 @@ void V_ScreenShot(char *format)
 
 #ifdef HAVE_LIBPNG
     extern int png_screenshots;
-    if (png_screenshots)
+    if(png_screenshots || use3drenderer)
     {
         ext = "png";
     }
@@ -808,35 +945,49 @@ void V_ScreenShot(char *format)
         ext = "pcx";
     }
 
-    for (i=0; i<=99; i++)
+    for(i = 0; i <= 99; i++)
     {
         M_snprintf(lbmname, sizeof(lbmname), format, i, ext);
 
-        if (!M_FileExists(lbmname))
+        if(!M_FileExists(lbmname))
         {
             break;      // file doesn't exist
         }
     }
 
-    if (i == 100)
+    if(i == 100)
     {
-        I_Error ("V_ScreenShot: Couldn't create a PCX");
+        // [SVE]: stability
+        //I_Error ("V_ScreenShot: Couldn't create a PCX");
+        return;
     }
 
-#ifdef HAVE_LIBPNG
-    if (png_screenshots)
+    if(!use3drenderer)
     {
-    WritePNGfile(lbmname, I_VideoBuffer,
-                 SCREENWIDTH, SCREENHEIGHT,
-                 W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+#ifdef HAVE_LIBPNG
+        if(png_screenshots)
+        {
+            WritePNGfile(lbmname, I_VideoBuffer,
+                SCREENWIDTH, SCREENHEIGHT,
+                W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+        }
+        else
+#endif
+        {
+            // save the pcx file
+            WritePCXfile(lbmname, I_VideoBuffer,
+                SCREENWIDTH, SCREENHEIGHT,
+                W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+        }
     }
     else
-#endif
     {
-    // save the pcx file
-    WritePCXfile(lbmname, I_VideoBuffer,
-                 SCREENWIDTH, SCREENHEIGHT,
-                 W_CacheLumpName (DEH_String("PLAYPAL"), PU_CACHE));
+        SDL_Surface *screen = SDL_GetVideoSurface();
+        byte *data = RB_GetScreenBufferData();
+
+        WriteHiResPNG(lbmname, data, screen->w, screen->h);
+
+        Z_Free(data);
     }
 }
 
@@ -930,3 +1081,149 @@ void V_DrawMouseSpeedBox(int speed)
                  MOUSE_SPEED_BOX_HEIGHT - 2, red);
 }
 
+//=============================================================================
+//
+// haleyjd 20140928: [SVE] Big font support
+//
+
+static int bfkerntbl[128*128];
+
+patch_t *bigfont[BIG_FONTSIZE];
+
+//
+// V_LoadBigFont
+//
+
+void V_LoadBigFont(void)
+{
+    size_t i;
+
+    // load patches
+    for(i = 0; i < BIG_FONTSIZE; i++)
+    {
+        int lumpnum;
+        int charnum = BIG_FONTSTART + i;
+        char lumpname[9];
+
+        M_snprintf(lumpname, sizeof(lumpname), "BFONT%02d", charnum);
+        if((lumpnum = W_CheckNumForName(lumpname)) >= 0)
+            bigfont[i] = W_CacheLumpNum(lumpnum, PU_STATIC);
+    }
+
+    // init kerning table
+    for(i = 0; i < arrlen(bfkerntbl); i++)
+        bfkerntbl[i] = -1; // default step is -1
+
+    for(i = 0; i < numkernings; i++)
+    {
+        kerndata_t *kd = &kernings[i];
+        bfkerntbl[kd->first + (((unsigned int)kd->second) << 7)] = kd->offset;
+    }
+}
+
+//
+// V_WriteBigText
+//
+
+void V_WriteBigText(const char *str, int x, int y)
+{
+    const char *rover;
+    char c;            // current char
+    char lastc = '\0'; // last char seen that wasn't a space
+    patch_t *patch;
+    int initx = x;
+
+    for(rover = str; *rover; rover++)
+    {
+        c = toupper(*rover);
+
+        if(c == ' ')
+        {
+            x += 8;
+            continue;
+        }
+        if(c == '\n')
+        {
+            y += 20;
+            x = initx;
+            lastc = '\0';
+            continue;
+        }
+
+        if(c < BIG_FONTSTART || c > BIG_FONTEND || !(patch = bigfont[c - BIG_FONTSTART]))
+            continue;
+
+        if(lastc) // kerning - move toward the left depending on the previous char
+            x += bfkerntbl[lastc + (((unsigned int)c) << 7)];
+
+        V_DrawPatch(x, y, patch);
+
+        x += SHORT(patch->width);
+        lastc = c;
+    }
+}
+
+//
+// V_BigFontStringWidth
+//
+
+int V_BigFontStringWidth(const char *str)
+{
+    const char *rover;
+    char c;            // current char
+    char lastc = '\0'; // last char seen that wasn't a space
+    patch_t *patch;
+    int widestwidth = 0;
+    int width = 0;
+
+    for(rover = str; *rover; rover++)
+    {
+        c = toupper(*rover);
+
+        if(c == ' ')
+        {
+            width += 8;
+            continue;
+        }
+        if(c == '\n')
+        {
+            if(width > widestwidth)
+                widestwidth = width;
+            width = 0;
+            lastc = '\0';
+            continue;
+        }
+
+        if(c < BIG_FONTSTART || c > BIG_FONTEND || !(patch = bigfont[c - BIG_FONTSTART]))
+            continue;
+
+        if(lastc)
+            width += bfkerntbl[lastc + (((unsigned int)c) << 7)];
+        width += SHORT(patch->width);
+
+        lastc = c;
+    }
+
+    if(width > widestwidth)
+        widestwidth = width;
+
+    return widestwidth;
+}
+
+//
+// V_BigFontStringHeight
+//
+
+int V_BigFontStringHeight(const char *str)
+{
+    const char *rover;
+    int height = 20; // always at least 20px
+
+    for(rover = str; *rover; rover++)
+    {
+        if(*rover == '\n')
+            height += 20; // +20 for every linebreak
+    }
+
+    return height;
+}

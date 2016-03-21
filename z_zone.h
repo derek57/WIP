@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -51,16 +52,15 @@ enum
         
 
 void	Z_Init (void);
-void*	Z_Malloc (int size, int tag, void *ptr);
+void*	Z_Malloc (int size, int tag, void **user);
 void    Z_Free (void *ptr);
 void    Z_FreeTags (int lowtag, int hightag);
-void    Z_DumpHeap (int lowtag, int hightag);
-void    Z_FileDumpHeap (FILE *f);
 void    Z_CheckHeap (void);
 void    Z_ChangeTag2 (void *ptr, int tag, char *file, int line);
-void    Z_ChangeUser(void *ptr, void **user);
-int     Z_FreeMemory (void);
-unsigned int Z_ZoneSize(void);
+
+// haleyjd 20140816: [SVE] needed memory management utils
+void *Z_Calloc(int n1, int n2, int tag, void **user);
+void *Z_Realloc(void *ptr, int size, int tag, void **user);
 
 //
 // This is used to get the local FILE:LINE info from CPP

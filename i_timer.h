@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -20,6 +21,8 @@
 #ifndef __I_TIMER__
 #define __I_TIMER__
 
+#include "m_fixed.h"
+
 #define TICRATE 35
 
 // Called by D_DoomLoop,
@@ -37,6 +40,14 @@ void I_InitTimer(void);
 
 // Wait for vertical retrace or pause a bit.
 void I_WaitVBL(int count);
+
+// haleyjd 20140902: [SVE] interpolation routines
+fixed_t I_TimerGetFrac(void);
+void I_TimerStartDisplay(void);
+void I_TimerEndDisplay(void);
+void I_TimerSaveMS(void);
+
+void I_ResetBaseTime(void);
 
 #endif
 

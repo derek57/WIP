@@ -2,6 +2,7 @@
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 1993-2008 Raven Software
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -31,9 +32,14 @@
 #include "doomfeatures.h"
 #include "i_system.h"
 #include "m_argv.h"
+#include "m_config.h"
 #include "m_misc.h"
 
 #include "z_zone.h"
+
+// [SVE] svillarreal
+#include "rb_config.h"
+#include "i_joystick.h"
 
 //
 // DEFAULTS
@@ -43,6 +49,10 @@
 // default.cfg, savegames, etc.
 
 char *configdir;
+
+// [SVE] svillarreal
+boolean config_fresh = false;
+boolean extra_config_fresh = false;
 
 // Default filenames for configuration files.
 
@@ -65,6 +75,10 @@ typedef struct
 
     // Pointer to the location in memory of the variable
     void *location;
+
+    // haleyjd [SVE]: Pointer to default location, if any (allows runtime mod
+    // of variables which must be runtime-invariant)
+    void *default_location;
 
     // Type of the variable
     default_type_t type;
@@ -93,7 +107,7 @@ typedef struct
 } default_collection_t;
 
 #define CONFIG_VARIABLE_GENERIC(name, type) \
-    { #name, NULL, type, 0, 0, false }
+    { #name, NULL, NULL, type, 0, 0, false }
 
 #define CONFIG_VARIABLE_KEY(name) \
     CONFIG_VARIABLE_GENERIC(name, DEFAULT_KEY)
@@ -119,7 +133,8 @@ static default_t	doom_defaults_list[] =
     // the game to crash when entering the options menu.
     //
 
-    CONFIG_VARIABLE_INT(mouse_sensitivity),
+    CONFIG_VARIABLE_INT(mouse_sensitivity_X),
+    CONFIG_VARIABLE_INT(mouse_sensitivity_Y),
 
     //!
     // Volume of sound effects, range 0-15.
@@ -363,6 +378,14 @@ static default_t	doom_defaults_list[] =
     //
 
     CONFIG_VARIABLE_KEY(key_invDrop),
+    
+    //!
+    // @game strife
+    //
+    // Keyboard key to center view
+    //
+    
+    CONFIG_VARIABLE_KEY(key_centerview),
 
     //!
     // @game strife
@@ -433,14 +456,6 @@ static default_t	doom_defaults_list[] =
     CONFIG_VARIABLE_INT(mouseb_forward),
 
     //!
-    // @game hexen strife
-    //
-    // Mouse button to jump.
-    //
-
-    CONFIG_VARIABLE_INT(mouseb_jump),
-
-    //!
     // If non-zero, joystick input is enabled.
     //
 
@@ -482,6 +497,54 @@ static default_t	doom_defaults_list[] =
     //
 
     CONFIG_VARIABLE_INT(joyb_jump),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invleft),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invright),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invuse),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invdrop),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_centerview),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_mission),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invpop),
+
+    //!
+    // @game strife [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(joyb_invkey),
 
     //!
     // @game doom heretic hexen
@@ -595,6 +658,7 @@ static default_t	doom_defaults_list[] =
 
     CONFIG_VARIABLE_STRING(back_flat),
 
+#ifndef _USE_STEAM_
     //!
     // @game strife
     //
@@ -602,6 +666,7 @@ static default_t	doom_defaults_list[] =
     //
 
     CONFIG_VARIABLE_STRING(nickname),
+#endif
 
     //!
     // Multiplayer chat macro: message to send when alt+0 is pressed.
@@ -692,6 +757,87 @@ static default_t extra_defaults_list[] =
     CONFIG_VARIABLE_INT(graphical_startup),
 
     //!
+    // @game strife [SVE]
+    //
+    // If non-zero, frame rates will be interpolated to 60fps
+    //
+
+    CONFIG_VARIABLE_INT(interpolate_frames),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, limit game to 60 FPS
+    //
+
+    CONFIG_VARIABLE_INT(d_fpslimit),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, intro movies will not play and instead skip
+    // directly to the frontend
+    //
+
+    CONFIG_VARIABLE_INT(skip_movies),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, player's view will bob after firing certain weapons
+    //
+
+    CONFIG_VARIABLE_INT(weapon_recoil),
+
+    //!
+    // @game strife [SVE]
+    //
+    // if non-zero, indicator arrows will display showing the source of the damage
+    //
+
+    CONFIG_VARIABLE_INT(damage_indicator),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, player autoaims in single player mode
+    //
+
+    CONFIG_VARIABLE_INT(autoaim),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, fullscreen HUD will be rendered
+    //
+
+    CONFIG_VARIABLE_INT(fullscreen_hud),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, enemy deaths will be twice of violent
+    //
+
+    CONFIG_VARIABLE_INT(max_gore),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, be as much like vanilla as is practical
+    //
+
+    CONFIG_VARIABLE_INT(classicmode),
+
+    //!
+    // @game strife [SVE]
+    //
+    // If non-zero, player always runs.
+    //
+
+    CONFIG_VARIABLE_INT(autorun),
+
+    //!
     // If non-zero, video settings will be autoadjusted to a valid
     // configuration when the screen_width and screen_height variables
     // do not match any valid configuration.
@@ -741,6 +887,13 @@ static default_t extra_defaults_list[] =
     CONFIG_VARIABLE_INT(screen_height),
 
     //!
+    // If 0, the game is going to try to set the best resolution available
+    // on the first run regardless of other settings. [SVE]
+    //
+
+    CONFIG_VARIABLE_INT(screen_init),
+
+    //!
     // Color depth of the screen, in bits.
     // If this is set to zero, the color depth will be automatically set
     // on startup to the machine's default/native color depth.
@@ -749,6 +902,8 @@ static default_t extra_defaults_list[] =
     CONFIG_VARIABLE_INT(screen_bpp),
 
     //!
+    // [SVE] svillarreal - from gl scale branch
+    //
     // Maximum scale factor for the intermediate buffer used for doing
     // hardware-based scaling. A scale factor of 1 will be very blurry
     // but not use a lot of texture memory; a scale factor of 4 gives
@@ -787,6 +942,12 @@ static default_t extra_defaults_list[] =
     //
 
     CONFIG_VARIABLE_INT(mouse_threshold),
+
+    // [SVE] svillarreal
+    CONFIG_VARIABLE_INT(mouse_invert),
+    CONFIG_VARIABLE_INT(mouse_scale),
+    CONFIG_VARIABLE_INT(mouse_enable_acceleration),
+    CONFIG_VARIABLE_INT(mouse_smooth),
 
     //!
     // Sound output sample rate, in Hz.  Typical values to use are
@@ -942,6 +1103,19 @@ static default_t extra_defaults_list[] =
     CONFIG_VARIABLE_INT(joystick_strafe_invert),
 
     //!
+    // [SVE] svillarreal - Joystick axis to use to for looking
+    //
+
+    CONFIG_VARIABLE_INT(joystick_look_axis),
+
+    //!
+    // [SVE] svillarreal - If non-zero, movement on the joystick axis used for looking
+    // is inverted.
+    //
+
+    CONFIG_VARIABLE_INT(joystick_look_invert),
+
+    //!
     // The physical joystick button that corresponds to joystick
     // virtual button #0.
     //
@@ -1011,6 +1185,16 @@ static default_t extra_defaults_list[] =
 
     CONFIG_VARIABLE_INT(joystick_physical_button9),
 
+    // [SVE]
+    // If you ask me this is totally braindead. EE supports practically
+    // unlimited joybuttons and never does anything remotely like this.
+
+    CONFIG_VARIABLE_INT(joystick_physical_button10),
+    CONFIG_VARIABLE_INT(joystick_physical_button11),
+    CONFIG_VARIABLE_INT(joystick_physical_button12),
+    CONFIG_VARIABLE_INT(joystick_physical_button13),
+    CONFIG_VARIABLE_INT(joystick_physical_button14),
+
     //!
     // Joystick virtual button to make the player strafe left.
     //
@@ -1023,11 +1207,32 @@ static default_t extra_defaults_list[] =
 
     CONFIG_VARIABLE_INT(joyb_straferight),
 
+    // [SVE] svillarreal
+    //!
+    // XInput right stick sensitivity
+    //
+
+    CONFIG_VARIABLE_FLOAT(joystick_sensitivity),
+
+    //!
+    // XInput right stick threshold
+    //
+
+    CONFIG_VARIABLE_FLOAT(joystick_threshold),
+
     //!
     // Joystick virtual button to activate the menu.
     //
 
     CONFIG_VARIABLE_INT(joyb_menu_activate),
+    CONFIG_VARIABLE_INT(joyb_menu_up),
+    CONFIG_VARIABLE_INT(joyb_menu_down),
+    CONFIG_VARIABLE_INT(joyb_menu_left),
+    CONFIG_VARIABLE_INT(joyb_menu_right),
+    CONFIG_VARIABLE_INT(joyb_menu_back),
+    CONFIG_VARIABLE_INT(joyb_menu_forward),
+    CONFIG_VARIABLE_INT(joyb_menu_confirm),
+    CONFIG_VARIABLE_INT(joyb_menu_abort),
 
     //!
     // Joystick virtual button that cycles to the previous weapon.
@@ -1076,6 +1281,34 @@ static default_t extra_defaults_list[] =
     //
 
     CONFIG_VARIABLE_INT(mouseb_nextweapon),
+
+    //!
+    // [SVE] svillarreal - moved here
+    // Mouse button to jump.
+    //
+
+    CONFIG_VARIABLE_INT(mouseb_jump),
+    
+    //!
+    // [SVE] haleyjd
+    // Mouse button to use inventory
+    //
+
+    CONFIG_VARIABLE_INT(mouseb_invuse),
+    
+    //!
+    // [SVE] haleyjd
+    // Mouse button to scroll to prev inventory
+    //
+
+    CONFIG_VARIABLE_INT(mouseb_invprev),
+    
+    //!
+    // [SVE] haleyjd
+    // Mouse button to scroll to next inventory
+    //
+
+    CONFIG_VARIABLE_INT(mouseb_invnext),
 
     //!
     // If non-zero, double-clicking a mouse button acts like pressing
@@ -1226,7 +1459,8 @@ static default_t extra_defaults_list[] =
     // Keyboard shortcut to toggle the detail level.
     //
 
-    CONFIG_VARIABLE_KEY(key_menu_detail),
+    // [SVE] svillarreal - renamed
+    CONFIG_VARIABLE_KEY(key_menu_autohealth),
 
     //!
     // Keyboard shortcut to quicksave the current game.
@@ -1359,6 +1593,72 @@ static default_t extra_defaults_list[] =
     //
 
     CONFIG_VARIABLE_KEY(key_map_clearmark),
+
+    //!
+    // Key to toggle the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_toggle),
+
+    //!
+    // Key to pan north when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_north),
+
+    //!
+    // Key to pan south when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_south),
+
+    //!
+    // Key to pan east when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_east),
+
+    //!
+    // Key to pan west when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_west),
+
+    //!
+    // Key to zoom in when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_zoomin),
+
+    //!
+    // Key to zoom out when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_zoomout),
+
+    //!
+    // Key to zoom out the maximum amount when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_maxzoom),
+
+    //!
+    // Key to toggle follow mode when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_follow),
+
+    //!
+    // Key to set a mark when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_mark),
+
+    //!
+    // Key to clear all marks when in the map view.
+    //
+
+    CONFIG_VARIABLE_INT(joybmap_clearmark),
 
     //!
     // Key to select weapon 1.
@@ -1557,6 +1857,12 @@ static default_t extra_defaults_list[] =
     //
 
     CONFIG_VARIABLE_KEY(key_multi_msgplayer8),
+
+    //
+    // [SVE] svillarreal - add rb variables here
+    //
+
+    ADD_RB_VARIABLES()
 };
 
 static default_collection_t extra_defaults =
@@ -1566,9 +1872,31 @@ static default_collection_t extra_defaults =
     NULL,
 };
 
+// haleyjd 20141008: [SVE] variables we allow to be manipulated, but are not saved in
+// the configuration file.
+static default_t unsaved_defaults_list[] =
+{
+    CONFIG_VARIABLE_INT(deathmatch),
+    CONFIG_VARIABLE_INT(fastparm),
+    CONFIG_VARIABLE_INT(nomonsters),
+    CONFIG_VARIABLE_INT(randomparm),
+    CONFIG_VARIABLE_INT(respawnparm),
+    CONFIG_VARIABLE_INT(startmap),
+    CONFIG_VARIABLE_INT(startskill),
+    CONFIG_VARIABLE_INT(timelimit),
+    CONFIG_VARIABLE_INT(fe_musicnum),
+};
+
+static default_collection_t unsaved_defaults =
+{
+    unsaved_defaults_list,
+    arrlen(unsaved_defaults_list),
+    NULL
+};
+
 // Search a collection for a variable
 
-static default_t *SearchCollection(default_collection_t *collection, char *name)
+static default_t *SearchCollection(default_collection_t *collection, const char *name)
 {
     int i;
 
@@ -1583,42 +1911,133 @@ static default_t *SearchCollection(default_collection_t *collection, char *name)
     return NULL;
 }
 
-// Mapping from DOS keyboard scan code to internal key code (as defined
-// in doomkey.h). I think I (fraggle) reused this from somewhere else
-// but I can't find where. Anyway, notes:
-//  * KEY_PAUSE is wrong - it's in the KEY_NUMLOCK spot. This shouldn't
-//    matter in terms of Vanilla compatibility because neither of
-//    those were valid for key bindings.
-//  * There is no proper scan code for PrintScreen (on DOS machines it
-//    sends an interrupt). So I added a fake scan code of 126 for it.
-//    The presence of this is important so we can bind PrintScreen as
-//    a screenshot key.
-static const int scantokey[128] =
+//
+// [SVE] svillarreal
+//
+
+typedef struct keyname_s
 {
-    0  ,    27,     '1',    '2',    '3',    '4',    '5',    '6',
-    '7',    '8',    '9',    '0',    '-',    '=',    KEY_BACKSPACE, 9,
-    'q',    'w',    'e',    'r',    't',    'y',    'u',    'i',
-    'o',    'p',    '[',    ']',    13,		KEY_RCTRL, 'a',    's',
-    'd',    'f',    'g',    'h',    'j',    'k',    'l',    ';',
-    '\'',   '`',    KEY_RSHIFT,'\\',   'z',    'x',    'c',    'v',
-    'b',    'n',    'm',    ',',    '.',    '/',    KEY_RSHIFT,KEYP_MULTIPLY,
-    KEY_RALT,  ' ',  KEY_CAPSLOCK,KEY_F1,  KEY_F2,   KEY_F3,   KEY_F4,   KEY_F5,
-    KEY_F6,   KEY_F7,   KEY_F8,   KEY_F9,   KEY_F10,  /*KEY_NUMLOCK?*/KEY_PAUSE,KEY_SCRLCK,KEY_HOME,
-    KEY_UPARROW,KEY_PGUP,KEY_MINUS,KEY_LEFTARROW,KEYP_5,KEY_RIGHTARROW,KEYP_PLUS,KEY_END,
-    KEY_DOWNARROW,KEY_PGDN,KEY_INS,KEY_DEL,0,   0,      0,      KEY_F11,
-    KEY_F12,  0,      0,      0,      0,      0,      0,      0,
-    0,      0,      0,      0,      0,      0,      0,      0,
-    0,      0,      0,      0,      0,      0,      0,      0,
-    0,      0,      0,      0,      0,      0,      0,      0,
-    0,      0,      0,      0,      0,      0,      KEY_PRTSCR, 0
+    const char *name;
+    int keycode;
+} keyname_t;
+
+static const keyname_t keynames[] =
+{
+    { "rightarrow",     KEY_RIGHTARROW },
+    { "leftarrow",      KEY_LEFTARROW },
+    { "uparrow",        KEY_UPARROW },
+    { "downarrow",      KEY_DOWNARROW },
+    { "escape",         KEY_ESCAPE },
+    { "enter",          KEY_ENTER },
+    { "tab",            KEY_TAB },
+    { "space",          0x20 },
+    { "f1",             KEY_F1 },
+    { "f2",             KEY_F2 },
+    { "f3",             KEY_F3 },
+    { "f4",             KEY_F4 },
+    { "f5",             KEY_F5 },
+    { "f6",             KEY_F6 },
+    { "f7",             KEY_F7 },
+    { "f8",             KEY_F8 },
+    { "f9",             KEY_F9 },
+    { "f10",            KEY_F10 },
+    { "f11",            KEY_F11 },
+    { "f12",            KEY_F12 },
+    { "backspace",      KEY_BACKSPACE },
+    { "pause",          KEY_PAUSE },
+    { "equals",         KEY_EQUALS },
+    { "minus",          KEY_MINUS },
+    { "rshift",         KEY_RSHIFT },
+    { "rctrl",          KEY_RCTRL },
+    { "ralt",           KEY_RALT },
+    { "lalt",           KEY_LALT },
+    { "capslock",       KEY_CAPSLOCK },
+    { "numlock",        KEY_NUMLOCK },
+    { "scrlck",         KEY_SCRLCK },
+    { "prtscr",         KEY_PRTSCR },
+    { "home",           KEY_HOME },
+    { "end",            KEY_END },
+    { "pgup",           KEY_PGUP },
+    { "pgdn",           KEY_PGDN },
+    { "ins",            KEY_INS },
+    { "del",            KEY_DEL },
+    { "keypad0",        KEYP_0 },
+    { "keypad1",        KEYP_1 },
+    { "keypad2",        KEYP_2 },
+    { "keypad3",        KEYP_3 },
+    { "keypad4",        KEYP_4 },
+    { "keypad5",        KEYP_5 },
+    { "keypad6",        KEYP_6 },
+    { "keypad7",        KEYP_7 },
+    { "keypad8",        KEYP_8 },
+    { "keypad9",        KEYP_9 },
+    { "keypad_divide",  KEYP_DIVIDE },
+    { "keypad_plus",    KEYP_PLUS },
+    { "keypad_minus",   KEYP_MINUS },
+    { "keypad_mult",    KEYP_MULTIPLY },
+    { "keypad_period",  KEYP_PERIOD },
+    { "keypad_equals",  KEYP_EQUALS },
+    { "keypad_enter",   KEYP_ENTER }
 };
+
+//
+// GetNameForKey
+//
+
+const char *GetNameForKey(const int key)
+{
+    int i;
+    static char keychar[2];
+    
+    for(i = 0; i < arrlen(keynames); ++i)
+    {
+        if(keynames[i].keycode == key)
+        {
+            return keynames[i].name;
+        }
+    }
+    
+    if(isprint(key & 0x7f))
+    {
+        keychar[0] = key;
+        return keychar;
+    }
+    
+    return 0;
+}
+
+//
+// GetKeyForName
+//
+
+const int GetKeyForName(const char *name)
+{
+    int i;
+    
+    for(i = 0; i < arrlen(keynames); ++i)
+    {
+        if(!strcmp(name, keynames[i].name))
+        {
+            return keynames[i].keycode;
+        }
+    }
+    
+    if(isprint(name[0]&0x7f))
+    {
+        return name[0];
+    }
+    
+    return 0;
+}
 
 
 static void SaveDefaultCollection(default_collection_t *collection)
 {
     default_t *defaults;
+    char *keyname;
     int i, v;
     FILE *f;
+    void *location; // haleyjd: [SVE]
 	
     f = fopen (collection->filename, "w");
     if (!f)
@@ -1644,70 +2063,43 @@ static void SaveDefaultCollection(default_collection_t *collection)
         for (; chars_written < 30; ++chars_written)
             fprintf(f, " ");
 
+        // [SVE] save the value from default, if it is set.
+        location = defaults[i].default_location ? 
+            defaults[i].default_location : defaults[i].location;
+
         // Print the value
 
         switch (defaults[i].type) 
         {
             case DEFAULT_KEY:
-
-                // use the untranslated version if we can, to reduce
-                // the possibility of screwing up the user's config
-                // file
-                
-                v = * (int *) defaults[i].location;
-
-                if (v == KEY_RSHIFT)
+                v = * (int *) location;
+                keyname = (char*)GetNameForKey(v);
+                if(keyname)
                 {
-                    // Special case: for shift, force scan code for
-                    // right shift, as this is what Vanilla uses.
-                    // This overrides the change check below, to fix
-                    // configuration files made by old versions that
-                    // mistakenly used the scan code for left shift.
-
-                    v = 54;
-                }
-                else if (defaults[i].untranslated
-                      && v == defaults[i].original_translated)
-                {
-                    // Has not been changed since the last time we
-                    // read the config file.
-
-                    v = defaults[i].untranslated;
+                    fprintf(f, "\"%s\"", keyname);
+                    break;
                 }
                 else
                 {
-                    // search for a reverse mapping back to a scancode
-                    // in the scantokey table
-
-                    int s;
-
-                    for (s=0; s<128; ++s)
-                    {
-                        if (scantokey[s] == v)
-                        {
-                            v = s;
-                            break;
-                        }
-                    }
+                    fprintf(f, "\"\"");
+                    break;
                 }
-
-	        fprintf(f, "%i", v);
                 break;
 
             case DEFAULT_INT:
-	        fprintf(f, "%i", * (int *) defaults[i].location);
+	        fprintf(f, "%i", * (int *) location);
                 break;
 
             case DEFAULT_INT_HEX:
-	        fprintf(f, "0x%x", * (int *) defaults[i].location);
+	        fprintf(f, "0x%x", * (int *) location);
                 break;
 
             case DEFAULT_FLOAT:
-                fprintf(f, "%f", * (float *) defaults[i].location);
+                fprintf(f, "%f", * (float *) location);
                 break;
 
             case DEFAULT_STRING:
-	        fprintf(f,"\"%s\"", * (char **) (defaults[i].location));
+	        fprintf(f,"\"%s\"", * (char **) location);
                 break;
         }
 
@@ -1719,7 +2111,7 @@ static void SaveDefaultCollection(default_collection_t *collection)
 
 // Parses integer values in the configuration file
 
-static int ParseIntParameter(char *strparm)
+static int ParseIntParameter(const char *strparm)
 {
     int parm;
 
@@ -1731,50 +2123,56 @@ static int ParseIntParameter(char *strparm)
     return parm;
 }
 
-static void SetVariable(default_t *def, char *value)
+static void SetVariable(default_t *def, const char *value, int flags)
 {
-    int intparm;
-
     // parameter found
+    void *location     = (flags & M_CFG_SETCURRENT) ? def->location : NULL;
+    void *def_location = (flags & M_CFG_SETDEFAULT) ? def->default_location : NULL;
+
 
     switch (def->type)
     {
         case DEFAULT_STRING:
-            * (char **) def->location = M_StringDuplicate(value);
+            if(location)
+                * (char **) location = M_Strdup(value);
+            if(def_location)
+                * (char **) def_location = M_Strdup(value);
             break;
 
         case DEFAULT_INT:
         case DEFAULT_INT_HEX:
-            * (int *) def->location = ParseIntParameter(value);
+            {
+                int val = ParseIntParameter(value);
+                if(location)
+                    * (int *) location = val;
+                if(def_location)
+                    * (int *) def_location = val;
+            }
             break;
 
         case DEFAULT_KEY:
-
-            // translate scancodes read from config
-            // file (save the old value in untranslated)
-
-            intparm = ParseIntParameter(value);
-            def->untranslated = intparm;
-            if (intparm >= 0 && intparm < 128)
             {
-                intparm = scantokey[intparm];
+                int key = GetKeyForName(value);
+                if(location)
+                    * (int *) location = key;
+                if(def_location)
+                    * (int *) def_location = key;
             }
-            else
-            {
-                intparm = 0;
-            }
-
-            def->original_translated = intparm;
-            * (int *) def->location = intparm;
             break;
 
         case DEFAULT_FLOAT:
-            * (float *) def->location = (float) atof(value);
+            {
+                float val = (float) atof(value);
+                if(location)
+                    * (float *) location = val;
+                if(def_location)
+                    * (float *) def_location = val;
+            }
             break;
     }
 }
 
-static void LoadDefaultCollection(default_collection_t *collection)
+static boolean LoadDefaultCollection(default_collection_t *collection)
 {
     FILE *f;
     default_t *def;
@@ -1789,7 +2187,7 @@ static void LoadDefaultCollection(default_collection_t *collection)
         // File not opened, but don't complain. 
         // It's probably just the first time they ran the game.
 
-        return;
+        return false;
     }
 
     while (!feof(f))
@@ -1829,10 +2227,11 @@ static void LoadDefaultCollection(default_collection_t *collection)
             memmove(strparm, strparm + 1, sizeof(strparm) - 1);
         }
 
-        SetVariable(def, strparm);
+        SetVariable(def, strparm, M_CFG_SETALL);
     }
 
     fclose (f);
+    return true;
 }
 
 // Set the default filenames to use for configuration files.
@@ -1932,13 +2331,16 @@ void M_LoadDefaults (void)
             = M_StringJoin(configdir, default_extra_config, NULL);
     }
 
-    LoadDefaultCollection(&doom_defaults);
-    LoadDefaultCollection(&extra_defaults);
+    if(!LoadDefaultCollection(&doom_defaults))
+        config_fresh = true;
+
+    if(!LoadDefaultCollection(&extra_defaults))
+        extra_config_fresh = true;
 }
 
 // Get a configuration file variable by its name
 
-static default_t *GetDefaultForName(char *name)
+static default_t *GetDefaultForName(const char *name)
 {
     default_t *result;
 
@@ -1949,6 +2351,12 @@ static default_t *GetDefaultForName(char *name)
     if (result == NULL)
     {
         result = SearchCollection(&extra_defaults, name);
+    }
+
+    // haleyjd 20141008: try internal list
+    if (result == NULL)
+    {
+        result = SearchCollection(&unsaved_defaults, name);
     }
 
     // Not found? Internal error.
@@ -1978,7 +2386,7 @@ void M_BindVariable(char *name, void *location)
 // Set the value of a particular variable; an API function for other
 // parts of the program to assign values to config variables by name.
 
-boolean M_SetVariable(char *name, char *value)
+boolean M_SetVariable(const char *name, const char *value)
 {
     default_t *variable;
 
@@ -1989,21 +2397,23 @@ boolean M_SetVariable(char *name, char *value)
         return false;
     }
 
-    SetVariable(variable, value);
+    SetVariable(variable, value, M_CFG_SETALL);
 
     return true;
 }
 
 // Get the value of a variable.
 
-int M_GetIntVariable(char *name)
+int M_GetIntVariable(const char *name)
 {
     default_t *variable;
 
     variable = GetDefaultForName(name);
 
     if (variable == NULL || !variable->bound
-     || (variable->type != DEFAULT_INT && variable->type != DEFAULT_INT_HEX))
+     || (variable->type != DEFAULT_INT && 
+         variable->type != DEFAULT_INT_HEX &&
+         variable->type != DEFAULT_KEY)) // haleyjd: [SVE]
     {
         return 0;
     }
@@ -2026,7 +2436,7 @@ const char *M_GetStrVariable(char *name)
     return *((const char **) variable->location);
 }
 
-float M_GetFloatVariable(char *name)
+float M_GetFloatVariable(const char *name)
 {
     default_t *variable;
 
@@ -2057,20 +2467,19 @@ static char *GetDefaultConfigDir(void)
 
     homedir = getenv("HOME");
 
-    if (homedir != NULL)
+    if(homedir != NULL)
     {
         // put all configuration in a config directory off the
         // homedir
-
         result = M_StringJoin(homedir, DIR_SEPARATOR_S,
-                              "." PACKAGE_TARNAME, DIR_SEPARATOR_S, NULL);
+                              PACKAGE_TARNAME, DIR_SEPARATOR_S, NULL);
 
         return result;
     }
     else
 #endif /* #ifndef _WIN32 */
     {
-        return M_StringDuplicate("");
+        return M_Strdup("");
     }
 }
 
@@ -2119,7 +2528,7 @@ char *M_GetSaveGameDir(char *iwadname)
 
     if (!strcmp(configdir, ""))
     {
-	savegamedir = M_StringDuplicate("");
+	savegamedir = M_Strdup("");
     }
     else
     {
@@ -2140,4 +2549,111 @@ char *M_GetSaveGameDir(char *iwadname)
 
     return savegamedir;
 }
+
+// haleyjd [SVE]: new functions for dealing with defaults
+
+//
+// Bind a variable providing a default backup location along with the primary address
+//
+void M_BindVariableWithDefault(char *name, void *location, void *default_location)
+{
+    default_t *variable;
+
+    variable = GetDefaultForName(name);
+
+    variable->location = location;
+    variable->default_location = default_location;
+    variable->bound = true;
+}
+
+//
+// Set any of the current location, default location, or both locations depending
+// on the flag values (any combination of M_CFG_SETCURRENT or M_CFG_SETDEFAULT)
+//
+boolean M_SetVariableByFlags(const char *name, const char *value, int flags)
+{
+    default_t *variable;
+
+    variable = GetDefaultForName(name);
+
+    if (variable == NULL || !variable->bound)
+    {
+        return false;
+    }
+
+    SetVariable(variable, value, flags); // pass on flags
+
+    return true;
+}
+
+//
+// Get the value in the variable's default location, if it has one; otherwise the
+// current value is returned.
+//
+int M_GetIntVariableDefault(const char *name)
+{
+    default_t *variable;
+
+    variable = GetDefaultForName(name);
+
+    if (variable == NULL || !variable->bound
+     || (variable->type != DEFAULT_INT && 
+         variable->type != DEFAULT_INT_HEX &&
+         variable->type != DEFAULT_KEY)) // haleyjd: [SVE]
+    {
+        return 0;
+    }
+
+    if(variable->default_location)
+        return *((int *) variable->default_location);
+    else
+        return *((int *) variable->location);
+}
+
+//
+// Get the value in the variable's default location, if it has one; otherwise the
+// current value is returned.
+//
+const char *M_GetStrVariableDefault(const char *name)
+{
+    default_t *variable;
+
+    variable = GetDefaultForName(name);
+
+    if (variable == NULL || !variable->bound
+     || variable->type != DEFAULT_STRING)
+    {
+        return NULL;
+    }
+
+    if(variable->default_location)
+        return *((const char **) variable->default_location);
+    else
+        return *((const char **) variable->location);
+}
+
+//
+// Get the value in the variable's default location, if it has one; otherwise the
+// current value is returned.
+//
+float M_GetFloatVariableDefault(const char *name)
+{
+    default_t *variable;
+
+    variable = GetDefaultForName(name);
+
+    if (variable == NULL || !variable->bound
+     || variable->type != DEFAULT_FLOAT)
+    {
+        return 0;
+    }
+
+    if(variable->default_location)
+        return *((float *) variable->default_location);
+    else
+        return *((float *) variable->location);
+}
+
+// EOF
+
 

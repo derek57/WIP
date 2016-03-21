@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -90,6 +91,7 @@ typedef struct
 } screen_mode_t;
 
 typedef boolean (*grabmouse_callback_t)(void);
+typedef boolean (*warpmouse_callback_t)(void); // haleyjd [SVE]
 
 // Called by D_DoomMain,
 // determines the hardware configuration
@@ -103,6 +105,7 @@ void I_ShutdownGraphics(void);
 // Takes full 8 bit values.
 void I_SetPalette (byte* palette);
 int I_GetPaletteIndex(int r, int g, int b);
+void I_GetPaletteColor(byte *rgb, int index);
 
 void I_UpdateNoBlit (void);
 void I_FinishUpdate (void);
@@ -116,12 +119,19 @@ void I_SetWindowTitle(char *title);
 
 void I_CheckIsScreensaver(void);
 void I_SetGrabMouseCallback(grabmouse_callback_t func);
+void I_SetWarpMouseCallback(warpmouse_callback_t func);
 
 void I_DisplayFPSDots(boolean dots_on);
 void I_BindVideoVariables(void);
 
 void I_InitWindowTitle(void);
 void I_InitWindowIcon(void);
+
+// [SVE] svillarreal
+void I_SetShowCursor(boolean show);
+void I_SetShowVisualCursor(boolean show);
+void I_GetAbsoluteMousePosition(int *x, int *y);
+void I_ClearMouseButtonState(void);
 
 // Called before processing any tics in a frame (just after displaying a frame).
 // Time consuming syncronous operations are performed here (joystick reading).
@@ -142,6 +152,7 @@ extern boolean screenvisible;
 
 extern float mouse_acceleration;
 extern int mouse_threshold;
+extern boolean mouse_invert;    // [SVE] svillarreal
 extern int vanilla_keyboard_mapping;
 extern boolean screensaver_mode;
 extern int usegamma;
@@ -152,5 +163,11 @@ extern int screen_height;
 extern int screen_bpp;
 extern int fullscreen;
 extern int aspect_ratio_correct;
+
+// [SVE]: defaults
+extern int default_screen_width;
+extern int default_screen_height;
+
+extern boolean i_seemouses;
 
 #endif

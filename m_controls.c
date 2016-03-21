@@ -29,12 +29,12 @@
 int key_right = KEY_RIGHTARROW;
 int key_left = KEY_LEFTARROW;
 
-int key_up = KEY_UPARROW;
-int key_down = KEY_DOWNARROW; 
-int key_strafeleft = ',';
-int key_straferight = '.';
+int key_up = 'w';
+int key_down = 's'; 
+int key_strafeleft = 'a';
+int key_straferight = 'd';
 int key_fire = KEY_RCTRL;
-int key_use = ' ';
+int key_use = 'e';
 int key_strafe = KEY_RALT;
 int key_speed = KEY_RSHIFT; 
 
@@ -50,15 +50,15 @@ int key_lookup = KEY_PGDN;
 int key_lookdown = KEY_DEL;
 int key_lookcenter = KEY_END;
 
-int key_invleft = '[';
-int key_invright = ']';
+int key_invleft = 'r';
+int key_invright = 'f';
 int key_useartifact = KEY_ENTER;
 
 //
 // Hexen key controls
 //
 
-int key_jump = '/';
+int key_jump = ' ';
 
 int key_arti_all             = KEY_BACKSPACE;
 int key_arti_health          = '\\';
@@ -78,15 +78,16 @@ int key_arti_invulnerability = '5';
 // Note: Strife also uses key_invleft, key_invright, key_jump, key_lookup, and
 // key_lookdown, but with different default values.
 
-int key_usehealth = 'h';
-int key_invquery  = 'q';
-int key_mission   = 'w';
-int key_invpop    = 'z';
-int key_invkey    = 'k';
-int key_invhome   = KEY_HOME;
-int key_invend    = KEY_END;
-int key_invuse    = KEY_ENTER;
-int key_invdrop   = KEY_BACKSPACE;
+int key_usehealth  = 'g';
+int key_invquery   = 'h';
+int key_mission    = 'x';
+int key_invpop     = 'z';
+int key_invkey     = 'k';
+int key_invhome    = 'b';
+int key_invend     = 'n';
+int key_invuse     = 'q';
+int key_invdrop    = 'v';
+int key_centerview = 'c'; // [SVE] svillarreal
 
 
 //
@@ -94,23 +95,26 @@ int key_invdrop   = KEY_BACKSPACE;
 //
 
 int mousebfire = 0;
-int mousebstrafe = 1;
-int mousebforward = 2;
+int mousebstrafe = -1;
+int mousebforward = -1;
 
-int mousebjump = -1;
+int mousebjump = 2;
 
 int mousebstrafeleft = -1;
 int mousebstraferight = -1;
 int mousebbackward = -1;
-int mousebuse = -1;
+int mousebuse = 1;
 
-int mousebprevweapon = -1;
-int mousebnextweapon = -1;
+int mousebprevweapon = 4;
+int mousebnextweapon = 3;
 
+int mousebinvuse  = -1;
+int mousebinvprev = -1;
+int mousebinvnext = -1;
 
 int key_message_refresh = KEY_ENTER;
 int key_pause = KEY_PAUSE;
-int key_demo_quit = 'q';
+int key_demo_quit = 'p';
 int key_spy = KEY_F12;
 
 // Multiplayer chat keys:
@@ -141,7 +145,7 @@ int key_map_zoomin    = '=';
 int key_map_zoomout   = '-';
 int key_map_toggle    = KEY_TAB;
 int key_map_maxzoom   = '0';
-int key_map_follow    = 'f';
+int key_map_follow    = 'l';
 int key_map_grid      = 'g';
 int key_map_mark      = 'm';
 int key_map_clearmark = 'c';
@@ -178,10 +182,10 @@ int key_menu_screenshot = 0;
 // Joystick controls
 //
 
-int joybfire = 0;
-int joybstrafe = 1;
-int joybuse = 3;
-int joybspeed = 2;
+int joybfire = -1;
+int joybstrafe = -1;
+int joybuse = -1;
+int joybspeed = -1;
 
 int joybstrafeleft = -1;
 int joybstraferight = -1;
@@ -191,13 +195,67 @@ int joybjump = -1;
 int joybprevweapon = -1;
 int joybnextweapon = -1;
 
-int joybmenu = -1;
+// [SVE] svillarreal - much needed joy buttons for menus
+int joybmenu           = -1;
+int joybmenu_up        = -1;
+int joybmenu_down      = -1;
+int joybmenu_left      = -1;
+int joybmenu_right     = -1;
+int joybmenu_back      = -1;
+int joybmenu_forward   = -1;
+int joybmenu_confirm   = -1;
+int joybmenu_abort     = -1;
+
+// [SVE] svillarreal
+int joybinvleft = -1;
+int joybinvright = -1;
+int joybinvuse = -1;
+int joybinvdrop = -1;
+int joybcenterview = -1;
+int joybmission = -1;
+int joybinvpop = -1;
+int joybinvkey = -1;
+
+// [SVE] svillarreal
+int joybmap_north     = -1;
+int joybmap_south     = -1;
+int joybmap_east      = -1;
+int joybmap_west      = -1;
+int joybmap_zoomin    = -1;
+int joybmap_zoomout   = -1;
+int joybmap_toggle    = -1;
+int joybmap_maxzoom   = -1;
+int joybmap_follow    = -1;
+int joybmap_mark      = -1;
+int joybmap_clearmark = -1;
 
 // Control whether if a mouse button is double clicked, it acts like 
 // "use" has been pressed
 
 int dclick_use = 1;
- 
+
+boolean M_CheckGamepadButtonVars(void)
+{
+    static int *vars[] =
+    {
+        &joybfire, &joybstrafe, &joybuse, &joybspeed, &joybstrafeleft,
+        &joybstraferight, &joybjump, &joybprevweapon, &joybnextweapon,
+        &joybinvleft, &joybinvright, &joybinvuse, &joybinvdrop,
+        &joybcenterview, &joybmission, &joybinvpop, &joybinvkey,
+    };
+
+    int i;
+    boolean allnegone = true;
+
+    for(i = 0; i < arrlen(vars); i++)
+    {
+        if(*vars[i] != -1)
+            allnegone = false;
+    }
+
+    return allnegone;
+}
+
 // 
 // Bind all of the common controls used by Doom and all other games.
 //
@@ -224,7 +282,16 @@ void M_BindBaseControls(void)
     M_BindVariable("joyb_use",           &joybuse);
     M_BindVariable("joyb_speed",         &joybspeed);
 
+    // [SVE] svillarreal - much needed joy buttons for menus
     M_BindVariable("joyb_menu_activate", &joybmenu);
+    M_BindVariable("joyb_menu_up",       &joybmenu_up);
+    M_BindVariable("joyb_menu_down",     &joybmenu_down);
+    M_BindVariable("joyb_menu_left",     &joybmenu_left);
+    M_BindVariable("joyb_menu_right",    &joybmenu_right);
+    M_BindVariable("joyb_menu_back",     &joybmenu_back);
+    M_BindVariable("joyb_menu_forward",  &joybmenu_forward);
+    M_BindVariable("joyb_menu_confirm",  &joybmenu_confirm);
+    M_BindVariable("joyb_menu_abort",    &joybmenu_abort);
 
     // Extra controls that are not in the Vanilla versions:
 
@@ -276,11 +343,11 @@ void M_BindStrifeControls(void)
     key_message_refresh = '/';
 
     // These keys are shared with Heretic/Hexen but have different defaults:
-    key_jump     = 'a';
+    //key_jump     = 'a';
     key_lookup   = KEY_PGUP;
     key_lookdown = KEY_PGDN;
-    key_invleft  = KEY_INS;
-    key_invright = KEY_DEL;
+    //key_invleft  = KEY_INS;
+    //key_invright = KEY_DEL;
 
     M_BindVariable("key_jump",           &key_jump);
     M_BindVariable("key_lookUp",         &key_lookup);
@@ -298,11 +365,29 @@ void M_BindStrifeControls(void)
     M_BindVariable("key_invEnd",         &key_invend);
     M_BindVariable("key_invUse",         &key_invuse);
     M_BindVariable("key_invDrop",        &key_invdrop);
+    
+    // [SVE] svillarreal
+    M_BindVariable("key_centerview",     &key_centerview);
 
     // Strife also supports jump on mouse and joystick, and in the exact same
     // manner as Hexen!
     M_BindVariable("mouseb_jump",        &mousebjump);
     M_BindVariable("joyb_jump",          &joybjump);
+
+    // [SVE] svillarreal
+    M_BindVariable("joyb_invleft",       &joybinvleft);
+    M_BindVariable("joyb_invright",      &joybinvright);
+    M_BindVariable("joyb_invuse",        &joybinvuse);
+    M_BindVariable("joyb_invdrop",       &joybinvdrop);
+    M_BindVariable("joyb_centerview",    &joybcenterview);
+    M_BindVariable("joyb_mission",       &joybmission);
+    M_BindVariable("joyb_invpop",        &joybinvpop);
+    M_BindVariable("joyb_invkey",        &joybinvkey);
+
+    // [SVE] haleyjd
+    M_BindVariable("mouseb_invuse",      &mousebinvuse);
+    M_BindVariable("mouseb_invprev",     &mousebinvprev);
+    M_BindVariable("mouseb_invnext",     &mousebinvnext);
 }
 
 void M_BindWeaponControls(void)
@@ -340,6 +425,19 @@ void M_BindMapControls(void)
     M_BindVariable("key_map_grid",       &key_map_grid);
     M_BindVariable("key_map_mark",       &key_map_mark);
     M_BindVariable("key_map_clearmark",  &key_map_clearmark);
+
+    // [SVE] svillarreal
+    M_BindVariable("joybmap_north",      &joybmap_north);
+    M_BindVariable("joybmap_south",      &joybmap_south);
+    M_BindVariable("joybmap_east",       &joybmap_east);
+    M_BindVariable("joybmap_west",       &joybmap_west);
+    M_BindVariable("joybmap_zoomin",     &joybmap_zoomin);
+    M_BindVariable("joybmap_zoomout",    &joybmap_zoomout);
+    M_BindVariable("joybmap_toggle",     &joybmap_toggle);
+    M_BindVariable("joybmap_maxzoom",    &joybmap_maxzoom);
+    M_BindVariable("joybmap_follow",     &joybmap_follow);
+    M_BindVariable("joybmap_mark",       &joybmap_mark);
+    M_BindVariable("joybmap_clearmark",  &joybmap_clearmark);
 }
 
 void M_BindMenuControls(void)
@@ -358,7 +456,7 @@ void M_BindMenuControls(void)
     M_BindVariable("key_menu_save",      &key_menu_save);
     M_BindVariable("key_menu_load",      &key_menu_load);
     M_BindVariable("key_menu_volume",    &key_menu_volume);
-    M_BindVariable("key_menu_detail",    &key_menu_detail);
+    M_BindVariable("key_menu_autohealth",&key_menu_detail); // [SVE] svillarreal - renamed
     M_BindVariable("key_menu_qsave",     &key_menu_qsave);
     M_BindVariable("key_menu_endgame",   &key_menu_endgame);
     M_BindVariable("key_menu_messages",  &key_menu_messages);

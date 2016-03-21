@@ -1,5 +1,6 @@
 //
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -99,8 +100,9 @@ struct _net_addr_s
 };
 
 // magic number sent when connecting to check this is a valid client
-
-#define NET_MAGIC_NUMBER 3436803284U
+// [SVE]: modified to prevent accidental UDP comm w/normal Choco clients
+//  (netplay protocol is not otherwise compatible due to needed changes)
+#define NET_MAGIC_NUMBER 3436039887U
 
 // header field value indicating that the packet is a reliable packet
 
@@ -178,6 +180,10 @@ typedef struct
     int loadgame;
     int random;  // [Strife only]
 
+    // [SVE] new settings
+    int classicmode;
+    int maxgore;
+
     // These fields are only used by the server when sending a game
     // start message:
 
@@ -197,7 +203,9 @@ typedef struct
 #define NET_TICDIFF_CONSISTANCY  (1 << 4)
 #define NET_TICDIFF_CHATCHAR     (1 << 5)
 #define NET_TICDIFF_RAVEN        (1 << 6)
-#define NET_TICDIFF_STRIFE       (1 << 7)
+#define NET_TICDIFF_STRIFE1      (1 << 7) // [SVE] separated into two fields
+#define NET_TICDIFF_STRIFE2      (1 << 8)
+#define NET_TICDIFF_PITCH        (1 << 9) // [SVE] svillarreal
 
 typedef struct
 {

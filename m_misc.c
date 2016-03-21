@@ -2,6 +2,7 @@
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 1993-2008 Raven Software
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -159,6 +160,44 @@ int M_ReadFile(char *name, byte **buffer)
     return length;
 }
 
+//
+// M_ReadFileAsString
+//
+// haleyjd 20140829: [SVE] Load a file assuming it's an ASCII string.
+//
+int M_ReadFileAsString(const char *name, char **buffer)
+{
+    FILE *handle;
+    int	count, length;
+    char *buf;
+	
+    handle = fopen(name, "rb");
+    if (handle == NULL)
+    {
+        *buffer = NULL;
+        return 0;
+    }
+
+    // find the size of the file by seeking to the end and
+    // reading the current position
+
+    length = M_FileLength(handle);
+    
+    buf = Z_Calloc(1, length+1, PU_STATIC, NULL);
+    count = fread(buf, 1, length, handle);
+    fclose (handle);
+	
+    if (count < length)
+    {
+        Z_Free(buf);
+        *buffer = NULL;
+        return 0;
+    }
+		
+    *buffer = buf;
+    return length;
+}
+
 // Returns the path to a temporary file of the given name, stored
 // inside the system temporary directory.
 //
@@ -282,26 +321,6 @@ char *M_StrCaseStr(char *haystack, char *needle)
     }
 
     return NULL;
-}
-
-//
-// Safe version of strdup() that checks the string was successfully
-// allocated.
-//
-
-char *M_StringDuplicate(const char *orig)
-{
-    char *result;
-
-    result = strdup(orig);
-
-    if (result == NULL)
-    {
-        I_Error("Failed to duplicate string (length %i)\n",
-                strlen(orig));
-    }
-
-    return result;
 }
 
 //
@@ -526,3 +545,61 @@ char *M_OEMToUTF8(const char *oem)
 
 #endif
 
+// haleyjd 20141005: [SVE]
+char *M_Itoa(int value, char *string, int radix)
+{
+   char tmp[33];
+   char *tp = tmp;
+   int i;
+   unsigned int v;
+   int sign;
+   char *sp;
+
+   if(radix > 36 || radix <= 1)
+   {
+      errno = EDOM;
+      return 0;
+   }
+
+   sign = (radix == 10 && value < 0);
+
+   if(sign)
+      v = -value;
+   else
+      v = (unsigned int)value;
+
+   while(v || tp == tmp)
+   {
+      i = v % radix;
+      v = v / radix;
+
+      if(i < 10)
+         *tp++ = i + '0';
+      else
+         *tp++ = i + 'a' - 10;
+   }
+
+   if(string == 0)
+      string = (char *)(malloc)((tp-tmp)+sign+1);
+   sp = string;
+
+   if(sign)
+      *sp++ = '-';
+
+   while(tp > tmp)
+      *sp++ = *--tp;
+   *sp = 0;
+
+   return string;
+}
+
+//
+// haleyjd 20141024: [SVE] Error-checked strdup
+//
+char *M_Strdup(const char *str)
+{
+    char *ret = strdup(str);
+    if(!ret)
+        I_Error("M_Strdup: failed on allocation of %lu bytes", strlen(str)+1);
+    return ret;
+}

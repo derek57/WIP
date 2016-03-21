@@ -1,5 +1,6 @@
 //
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -22,7 +23,7 @@
 // Number of "virtual" joystick buttons defined in configuration files.
 // This needs to be at least as large as the number of different key
 // bindings supported by the higher-level game code (joyb* variables).
-#define NUM_VIRTUAL_BUTTONS 10
+#define NUM_VIRTUAL_BUTTONS 15
 
 // If this bit is set in a configuration file axis value, the axis is
 // not actually a joystick axis, but instead is a "button axis". This
@@ -60,11 +61,33 @@
 #define HAT_AXIS_HORIZONTAL 1
 #define HAT_AXIS_VERTICAL   2
 
+// [SVE] svillarreal
+extern float joystick_sensitivity;
+extern float joystick_threshold;
+
 void I_InitJoystick(void);
 void I_ShutdownJoystick(void);
 void I_UpdateJoystick(void);
-
+int  I_GetJoystickEventID(void);
+int  I_GetJoystickAxisID(int *axisvalue);
 void I_BindJoystickVariables(void);
+
+// [SVE] runtime joystick selection
+int  I_QueryNumJoysticks(void);
+void I_ActivateJoystickDevice(int index);
+int  I_QueryActiveJoystickNum(void);
+const char *I_QueryJoystickName(int index);
+const char *I_QueryActiveJoystickName(void);
+boolean     I_JoystickAllowed(void);
+
+// [SVE] some bullcrap
+extern boolean i_seejoysticks;
+
+// [SVE] frontend functions
+int I_JoystickGetButtons(void);
+int I_JoystickGetButtonsEvent(void);
+void I_JoystickResetOldButtons(void);
+void I_JoystickGetAxes(int *x_axis, int *y_axis, int *s_axis, int *l_axis);
 
 #endif /* #ifndef __I_JOYSTICK__ */
 

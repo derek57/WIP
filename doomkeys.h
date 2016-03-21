@@ -70,24 +70,24 @@
 #define KEY_INS         (0x80+0x52)
 #define KEY_DEL         (0x80+0x53)
 
-#define KEYP_0          0
-#define KEYP_1          KEY_END
-#define KEYP_2          KEY_DOWNARROW
-#define KEYP_3          KEY_PGDN
-#define KEYP_4          KEY_LEFTARROW
-#define KEYP_5          '5'
-#define KEYP_6          KEY_RIGHTARROW
-#define KEYP_7          KEY_HOME
-#define KEYP_8          KEY_UPARROW
-#define KEYP_9          KEY_PGUP
+#define KEYP_0          (0x100+0x01)
+#define KEYP_1          (0x100+0x02)
+#define KEYP_2          (0x100+0x03)
+#define KEYP_3          (0x100+0x04)
+#define KEYP_4          (0x100+0x05)
+#define KEYP_5          (0x100+0x06)
+#define KEYP_6          (0x100+0x07)
+#define KEYP_7          (0x100+0x08)
+#define KEYP_8          (0x100+0x09)
+#define KEYP_9          (0x100+0x0a)
 
-#define KEYP_DIVIDE     '/'
-#define KEYP_PLUS       '+'
-#define KEYP_MINUS      '-'
-#define KEYP_MULTIPLY   '*'
-#define KEYP_PERIOD     0
-#define KEYP_EQUALS     KEY_EQUALS
-#define KEYP_ENTER      KEY_ENTER
+#define KEYP_DIVIDE     (0x100+0x0b)
+#define KEYP_PLUS       (0x100+0x0c)
+#define KEYP_MINUS      (0x100+0x0d)
+#define KEYP_MULTIPLY   (0x100+0x0e)
+#define KEYP_PERIOD     (0x100+0x0f)
+#define KEYP_EQUALS     (0x100+0x10)
+#define KEYP_ENTER      (0x100+0x11)
 
 #endif          // __DOOMKEYS__
 

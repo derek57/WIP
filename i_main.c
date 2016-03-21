@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -25,6 +26,12 @@
 #include "doomtype.h"
 #include "i_system.h"
 #include "m_argv.h"
+
+// [SVE] svillarreal
+#include "m_parser.h"
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
 
 //
 // D_DoomMain()
@@ -125,23 +132,40 @@ static void LockCPUAffinity(void)
 
 #endif
 
+#if defined(__APPLE__)
+int I_Main(int argc, char **argv)
+#else
 int main(int argc, char **argv)
+#endif
 {
     // save arguments
 
     myargc = argc;
     myargv = argv;
 
+#ifdef _USE_STEAM_
+    // [SVE] svillarreal - initialize steam
+    if(I_SteamCheckForRestart())
+        return 1;
+
+    I_SteamInit();
+    I_AtExit(I_SteamShutdown, true);
+#endif
+
     // Only schedule on a single core, if we have multiple
     // cores.  This is to work around a bug in SDL_mixer.
-
+    // [SVE]: this should not be needed any more.
+#if 0
     LockCPUAffinity();
+#endif
 
     M_FindResponseFile();
 
-    // start doom
+    // [SVE] svillarreal - init parser and ffmpeg
+    M_ParserInit();
 
-    D_DoomMain ();
+    // start doom
+    D_DoomMain();
 
     return 0;
 }

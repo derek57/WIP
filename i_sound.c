@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -53,7 +54,8 @@ char *snd_musiccmd = "";
 static sound_module_t *sound_module;
 static music_module_t *music_module;
 
-int snd_musicdevice = SNDDEVICE_SB;
+int snd_musicdevice = SNDDEVICE_GENMIDI;         // [SVE]
+int default_snd_musicdevice = SNDDEVICE_GENMIDI; // [SVE]
 int snd_sfxdevice = SNDDEVICE_SB;
 
 // Sound modules
@@ -434,7 +436,9 @@ void I_BindSoundVariables(void)
     extern int use_libsamplerate;
     extern float libsamplerate_scale;
 
-    M_BindVariable("snd_musicdevice",   &snd_musicdevice);
+    // [SVE] 20141210: needs default
+    M_BindVariableWithDefault("snd_musicdevice",   &snd_musicdevice, &default_snd_musicdevice);
+
     M_BindVariable("snd_sfxdevice",     &snd_sfxdevice);
     M_BindVariable("snd_sbport",        &snd_sbport);
     M_BindVariable("snd_sbirq",         &snd_sbirq);

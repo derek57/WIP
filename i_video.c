@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -34,7 +35,10 @@
 #include "deh_str.h"
 #include "doomtype.h"
 #include "doomkeys.h"
+
+// [SVE] svillarreal - from gl scale branch
 #include "i_glscale.h"
+
 #include "i_joystick.h"
 #include "i_system.h"
 #include "i_swap.h"
@@ -48,6 +52,21 @@
 #include "v_video.h"
 #include "w_wad.h"
 #include "z_zone.h"
+
+// [SVE] svillarreal
+#include "doomstat.h"
+#include "rb_main.h"
+#include "rb_draw.h"
+#include "rb_wipe.h"
+#include "fe_frontend.h"
+#include "m_help.h"
+
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
+
+// [SVE]: Track whether or not we see mouse events
+boolean i_seemouses;
 
 // Lookup table for mapping ASCII characters to their equivalent when
 // shift is pressed on an American layout keyboard:
@@ -123,6 +142,7 @@ static screen_mode_t *screen_modes_corrected[] = {
     &mode_squash_2x,
     &mode_squash_3x,
     &mode_squash_4x,
+    &mode_squash_5x,
 };
 
 // SDL video driver name
@@ -131,7 +151,7 @@ char *video_driver = "";
 
 // Window position:
 
-static char *window_position = "";
+static char *window_position = "center";
 
 // SDL surface for the screen.
 
@@ -147,7 +167,7 @@ static char *window_title = "";
 
 static SDL_Surface *screenbuffer = NULL;
 
-// Palette:
+// palette
 
 static SDL_Color palette[256];
 static boolean palette_to_set;
@@ -183,6 +203,14 @@ static boolean native_surface;
 
 int screen_width = SCREENWIDTH;
 int screen_height = SCREENHEIGHT;
+int default_screen_width = SCREENWIDTH;
+int default_screen_height = SCREENHEIGHT;
+
+// [SVE] haleyjd
+boolean screen_init;
+
+// [SVE] svillarreal
+static boolean show_visual_cursor = false;
 
 // Color depth.
 
@@ -196,6 +224,7 @@ static int autoadjust_video_settings = 1;
 // Run in full screen mode?  (int type for config code)
 
 int fullscreen = true;
+int default_fullscreen = true; // [SVE]
 
 // Aspect ratio correction mode
 
@@ -223,6 +252,8 @@ boolean screensaver_mode = false;
 
 boolean screenvisible;
 
+// [SVE] svillarreal - from gl scale branch
+//
 // If true, we are rendering the screen using OpenGL hardware scaling
 // rather than software mode.
 
@@ -242,6 +273,7 @@ static boolean noblit;
 // mouse pointer.
 
 static grabmouse_callback_t grabmouse_callback = NULL;
+static warpmouse_callback_t warpmouse_callback = NULL; // haleyjd [SVE]
 
 // disk image data and background overwritten by the disk to be
 // restored by EndRead
@@ -268,7 +300,7 @@ static unsigned int last_resize_time;
 // The sensible thing to do is to disable this if you have a non-US
 // keyboard.
 
-int vanilla_keyboard_mapping = true;
+int vanilla_keyboard_mapping = false; // haleyjd [SVE]: false by default
 
 // Is the shift key currently down?
 
@@ -285,6 +317,10 @@ static int shiftdown = 0;
 
 float mouse_acceleration = 2.0;
 int mouse_threshold = 10;
+boolean mouse_invert = false;   // [SVE] svillarreal
+boolean mouse_enable_acceleration = false; // [SVE] svillarreal
+boolean mouse_smooth = false; // [SVE] svillarreal
+int mouse_scale = 2;
 
 // Gamma correction level to use
 
@@ -307,7 +343,7 @@ static boolean MouseShouldBeGrabbed()
     // always grab the mouse when full screen (dont want to 
     // see the mouse pointer)
 
-    if (fullscreen)
+    if (fullscreen && !show_visual_cursor) // [SVE]: allow visual cursor
         return true;
 
     // Don't grab the mouse if mouse input is disabled
@@ -333,9 +369,26 @@ static boolean MouseShouldBeGrabbed()
     }
 }
 
+//
+// haleyjd 20141007: [SVE]
+// Our improved mouse support in the menus for SVE requires not warping the
+// mouse based on the menu being active, even though it's been released. This
+// callback is used similar to the above to let the game code tell us when 
+// we're ok to warp the mouse and when we should leave it alone.
+//
+static boolean MouseShouldBeWarped(void)
+{
+    return warpmouse_callback ? warpmouse_callback() : true;
+}
+
 void I_SetGrabMouseCallback(grabmouse_callback_t func)
 {
     grabmouse_callback = func;
+}
+
+void I_SetWarpMouseCallback(warpmouse_callback_t func)
+{
+    warpmouse_callback = func;
 }
 
 // Set the variable controlling FPS dots.
@@ -370,7 +423,7 @@ static void UpdateFocus(void)
 // Show or hide the mouse cursor. We have to use different techniques
 // depending on the OS.
 
-static void SetShowCursor(boolean show)
+void I_SetShowCursor(boolean show)
 {
     // On Windows, using SDL_ShowCursor() adds lag to the mouse input,
     // so work around this by setting an invisible cursor instead. On
@@ -378,7 +431,7 @@ static void SetShowCursor(boolean show)
     // hack has to be Windows-only. (Thanks to entryway for this)
 
 #ifdef _WIN32
-    if (show)
+    if (show && !show_visual_cursor) // [SVE]
     {
         SDL_SetCursor(cursors[1]);
     }
@@ -387,7 +440,7 @@ static void SetShowCursor(boolean show)
         SDL_SetCursor(cursors[0]);
     }
 #else
-    SDL_ShowCursor(show);
+    SDL_ShowCursor(show && !show_visual_cursor);
 #endif
 
     // When the cursor is hidden, grab the input.
@@ -396,6 +449,20 @@ static void SetShowCursor(boolean show)
     {
         SDL_WM_GrabInput(!show);
     }
+}
+
+//
+// I_SetShowVisualCursor
+//
+
+void I_SetShowVisualCursor(boolean show)
+{
+    show_visual_cursor = show;
+#ifdef _WIN32
+    SDL_SetCursor(cursors[0]);
+#else
+    SDL_ShowCursor(0);
+#endif
 }
 
 void I_EnableLoadingDisk(void)
@@ -454,8 +521,9 @@ void I_EnableLoadingDisk(void)
 //
 // Translates the SDL key
 //
-
-static int TranslateKey(SDL_keysym *sym)
+// [SVE]: Externalized (needed in frontend)
+//
+int TranslateKey(SDL_keysym *sym)
 {
     switch(sym->sym)
     {
@@ -554,7 +622,7 @@ void I_ShutdownGraphics(void)
 {
     if (initialized)
     {
-        SetShowCursor(true);
+        I_SetShowCursor(true);
 
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
 
@@ -569,8 +637,21 @@ void I_ShutdownGraphics(void)
 //
 void I_StartFrame (void)
 {
-    // er?
+#ifdef _USE_STEAM_
+    // [SVE] svillarreal
+    I_SteamUpdate();
+#endif
+}
 
+//
+// I_ClearMouseButtonState
+//
+// [SVE] svillarreal
+//
+
+void I_ClearMouseButtonState(void)
+{
+    mouse_button_state = 0;
 }
 
 static void UpdateMouseButtonState(unsigned int button, boolean on)
@@ -619,14 +700,19 @@ static void UpdateMouseButtonState(unsigned int button, boolean on)
 
     // Post an event with the new button state.
 
-    event.type = ev_mouse;
+    event.type = ev_mousebutton;
     event.data1 = mouse_button_state;
     event.data2 = event.data3 = 0;
     D_PostEvent(&event);
+    i_seemouses = true;
+    i_seejoysticks = false;
 }
 
 static int AccelerateMouse(int val)
 {
+    if(mouse_acceleration <= 0 || !mouse_enable_acceleration)
+        return val;
+
     if (val < 0)
         return -AccelerateMouse(-val);
 
@@ -708,6 +794,46 @@ static void UpdateShiftStatus(SDL_Event *event)
     }
 }
 
+//
+// haleyjd 20141004: [SVE] Get true mouse position
+//
+void I_GetAbsoluteMousePosition(int *x, int *y)
+{
+    SDL_Surface *display = SDL_GetVideoSurface();
+    int w = display->w;
+    int h = display->h;
+    fixed_t aspectRatio = w * FRACUNIT / h;
+
+    if(!display)
+        return;
+
+    SDL_PumpEvents();
+    SDL_GetMouseState(x, y);
+
+    if(aspectRatio == 4 * FRACUNIT / 3) // nominal
+    {
+        *x = *x * SCREENWIDTH  / w;
+        *y = *y * SCREENHEIGHT / h;
+    }
+    else if(aspectRatio > 4 * FRACUNIT / 3) // widescreen
+    {
+        // calculate centered 4:3 subrect
+        int sw = h * 4 / 3;
+        int hw = (w - sw) / 2;
+
+        *x = (*x - hw) * SCREENWIDTH / sw;
+        *y = *y * SCREENHEIGHT / h;
+    }
+    else // narrow
+    {
+        int sh = w * 3 / 4;
+        int hh = (h - sh) / 2;
+
+        *x = *x * SCREENWIDTH / w;
+        *y = (*y - hh) * SCREENHEIGHT / sh;
+    }
+}
+
 void I_GetEvent(void)
 {
     SDL_Event sdlevent;
@@ -784,17 +910,17 @@ void I_GetEvent(void)
                 */
 
             case SDL_MOUSEBUTTONDOWN:
-		if (usemouse && !nomouse)
-		{
+                if (usemouse && !nomouse)
+                {
                     UpdateMouseButtonState(sdlevent.button.button, true);
-		}
+                }
                 break;
 
             case SDL_MOUSEBUTTONUP:
-		if (usemouse && !nomouse)
-		{
+                if (usemouse && !nomouse)
+                {
                     UpdateMouseButtonState(sdlevent.button.button, false);
-		}
+                }
                 break;
 
             case SDL_QUIT:
@@ -811,12 +937,16 @@ void I_GetEvent(void)
                 palette_to_set = true;
                 break;
 
+                // [SVE] svillarreal - this is a huge hassle to support with
+                // the OpenGL context
+#if 0
             case SDL_RESIZABLE:
                 need_resize = true;
                 resize_w = sdlevent.resize.w;
                 resize_h = sdlevent.resize.h;
                 last_resize_time = SDL_GetTicks();
                 break;
+#endif
 
             default:
                 break;
@@ -850,6 +980,7 @@ static void CenterMouse(void)
 
 static void I_ReadMouse(void)
 {
+    static int last_x = 0, last_y = 0;
     int x, y;
     event_t ev;
 
@@ -859,22 +990,43 @@ static void I_ReadMouse(void)
     SDL_GetRelativeMouseState(&x, &y);
 #endif
 
-    if (x != 0 || y != 0) 
-    {
-        ev.type = ev_mouse;
-        ev.data1 = mouse_button_state;
-        ev.data2 = AccelerateMouse(x);
+    // [SVE] svillarreal
+    if(mouse_scale > 4) mouse_scale = 4;
+    if(mouse_scale < 0) mouse_scale = 0;
 
-        if (!novert)
+    if(x != 0 || y != 0) 
+    {
+        // [SVE] svillarreal
+        if(mouse_scale > 0)
         {
-            ev.data3 = -AccelerateMouse(y);
+            x *= (1 + mouse_scale);
+            y *= (0 + mouse_scale);
         }
+
+        ev.type = ev_mouse;
+        ev.data1 = 0;
+        ev.data2 = AccelerateMouse(mouse_smooth ? ((x + last_x) / 2) : x);
+
+        // [SVE]: "novert" not supported with this meaning; instead we disable
+        // mouse look, since we don't support moving forward with the mouse, and
+        // we require it to be active in the menus.
+        //if (!novert)
+        {
+            ev.data3 = -AccelerateMouse(mouse_smooth ? ((y + last_y) / 2) : y);
+        }
+        /*
         else
         {
             ev.data3 = 0;
         }
+        */
         
         D_PostEvent(&ev);
+        i_seemouses = true;
+        i_seejoysticks = false;
+
+        last_x = x;
+        last_y = y;
     }
 
     if (MouseShouldBeGrabbed())
@@ -893,14 +1045,24 @@ void I_StartTic (void)
         return;
     }
 
-    I_GetEvent();
-
-    if (usemouse && !nomouse)
+    // [SVE]:
+    // if doing in-game options, call the frontend responder for all input
+    if(FE_InOptionsMenu())
     {
-        I_ReadMouse();
+        if(FE_InGameOptionsResponder())
+            FE_EndInGameOptionsMenu();
     }
+    else
+    {
+        I_GetEvent();
 
-    I_UpdateJoystick();
+        if (usemouse && !nomouse)
+        {
+            I_ReadMouse();
+        }
+
+        I_UpdateJoystick();
+    }
 }
 
 
@@ -923,16 +1085,16 @@ static void UpdateGrab(void)
     {
         // Hide the cursor in screensaver mode
 
-        SetShowCursor(false);
+        I_SetShowCursor(false);
     }
     else if (grab && !currently_grabbed)
     {
-        SetShowCursor(false);
+        I_SetShowCursor(false);
         CenterMouse();
     }
     else if (!grab && currently_grabbed)
     {
-        SetShowCursor(true);
+        I_SetShowCursor(true);
 
         // When releasing the mouse from grab, warp the mouse cursor to
         // the bottom-right of the screen. This is a minimally distracting
@@ -940,7 +1102,8 @@ static void UpdateGrab(void)
         // because we're at an end of level intermission screen, for
         // example.
 
-        SDL_WarpMouse(screen->w - 16, screen->h - 16);
+        if(MouseShouldBeWarped()) // [SVE]: done conditionally.
+            SDL_WarpMouse(screen->w - 16, screen->h - 16);
         SDL_GetRelativeMouseState(NULL, NULL);
     }
 
@@ -1016,6 +1179,7 @@ void I_BeginRead(void)
                     + (SCREENWIDTH - LOADING_DISK_W);
     int y;
 
+    // [SVE] svillarreal - from gl scale branch
     if (!initialized || disk_image == NULL || using_opengl)
         return;
 
@@ -1044,6 +1208,7 @@ void I_EndRead(void)
                     + (SCREENWIDTH - LOADING_DISK_W);
     int y;
 
+    // [SVE] svillarreal - from gl scale branch
     if (!initialized || disk_image == NULL || using_opengl)
         return;
 
@@ -1062,6 +1227,7 @@ void I_EndRead(void)
                SCREENWIDTH, SCREENHEIGHT);
 }
 
+// [SVE] svillarreal - from gl scale branch
 // Ending of I_FinishUpdate() when in software scaling mode.
 
 static void FinishUpdateSoftware(void)
@@ -1135,23 +1301,45 @@ void I_FinishUpdate (void)
 
     // draws little dots on the bottom of the screen
 
-    if (display_fps_dots)
+    if(display_fps_dots)
     {
-	i = I_GetTime();
-	tics = i - lasttic;
-	lasttic = i;
-	if (tics > 20) tics = 20;
+	    i = I_GetTime();
+	    tics = i - lasttic;
+	    lasttic = i;
+	    if (tics > 20) tics = 20;
 
-	for (i=0 ; i<tics*4 ; i+=4)
-	    I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0xff;
-	for ( ; i<20*4 ; i+=4)
-	    I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0x0;
+	    for (i=0 ; i<tics*4 ; i+=4)
+	        I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0xff;
+	    for ( ; i<20*4 ; i+=4)
+	        I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0x0;
     }
 
+    // draw to screen
+    // [SVE] svillarreal - from gl scale branch
     if (using_opengl)
     {
-        I_GL_UpdateScreen(I_VideoBuffer, palette);
-        SDL_GL_SwapBuffers();
+        int mouse_x, mouse_y;
+
+        if(!use3drenderer)
+        {
+            I_GL_UpdateScreen(I_VideoBuffer, palette);
+        }
+        else
+        {
+            M_HelpDrawerGL();
+            RB_DrawPatchBuffer();
+        }
+
+        if(show_visual_cursor)
+        {
+            if(i_seemouses || !i_seejoysticks) // haleyjd 20141202: this is overtime work.
+            {
+                SDL_GetMouseState(&mouse_x, &mouse_y);
+                RB_DrawMouseCursor(mouse_x, mouse_y);
+            }
+        }
+
+        RB_SwapBuffers();
     }
     else
     {
@@ -1219,6 +1407,17 @@ int I_GetPaletteIndex(int r, int g, int b)
     return best;
 }
 
+//
+// I_GetPaletteColor
+//
+
+void I_GetPaletteColor(byte *rgb, int index)
+{
+    rgb[0] = palette[index].r;
+    rgb[1] = palette[index].g;
+    rgb[2] = palette[index].b;
+}
+
 // 
 // Set the window title
 //
@@ -1235,11 +1434,12 @@ void I_SetWindowTitle(char *title)
 
 void I_InitWindowTitle(void)
 {
-    char *buf;
+    // haleyjd 20140827: [SVE] hard coded title
+    char *buf = "Strife: Veteran Edition";
 
-    buf = M_StringJoin(window_title, " - ", PACKAGE_STRING, NULL);
+    //buf = M_StringJoin(window_title, " - ", PACKAGE_STRING, NULL);
     SDL_WM_SetCaption(buf, NULL);
-    free(buf);
+    //free(buf);
 }
 
 // Set the application icon
@@ -1307,6 +1507,7 @@ static screen_mode_t *I_FindScreenMode(int w, int h)
     int best_num_pixels;
     int i;
 
+    // [SVE] svillarreal - from gl scale branch
     // In OpenGL mode the rules are different. We can have any
     // resolution, though it needs to match the aspect ratio we
     // expect.
@@ -1315,6 +1516,7 @@ static screen_mode_t *I_FindScreenMode(int w, int h)
     {
         static screen_mode_t gl_mode;
         int screenheight;
+        float screenwidth;
 
         if (aspect_ratio_correct)
         {
@@ -1324,8 +1526,12 @@ static screen_mode_t *I_FindScreenMode(int w, int h)
         {
             screenheight = SCREENHEIGHT;
         }
+        
+        // [SVE] svillarreal - if using 3d renderer then account for widescreen resolutions
+        screenwidth = use3drenderer ? (float)screenheight * (float)w / (float)h : SCREENWIDTH;
+        screenwidth = ((float)h * screenwidth / (float)screenheight);
 
-        gl_mode.width = h * SCREENWIDTH / screenheight;
+        gl_mode.width = (int)screenwidth;
         gl_mode.height = h;
         gl_mode.InitMode = NULL;
         gl_mode.DrawScreen = NULL;
@@ -1400,6 +1606,14 @@ static boolean AutoAdjustFullscreen(void)
     {
         return false;
     }
+    
+    // [SVE]: On first time run, set desired res to best available res
+    if(!screen_init && use3drenderer)
+    {
+        screen_width  = default_screen_width  = modes[0]->w;
+        screen_height = default_screen_height = modes[0]->h;
+        screen_init   = true;        // do not do this again
+    }
 
     // Find the best mode that matches the mode specified in the
     // configuration file
@@ -1456,8 +1670,8 @@ static boolean AutoAdjustFullscreen(void)
     printf("I_InitGraphics: %ix%i mode not supported on this machine.\n",
            screen_width, screen_height);
 
-    screen_width = best_mode->w;
-    screen_height = best_mode->h;
+    screen_width  = default_screen_width  = best_mode->w;
+    screen_height = default_screen_height = best_mode->h;
 
     return true;
 }
@@ -1487,8 +1701,8 @@ static void AutoAdjustWindowed(void)
         printf("I_InitGraphics: Cannot run at specified mode: %ix%i\n",
                screen_width, screen_height);
 
-        screen_width = best_mode->width;
-        screen_height = best_mode->height;
+        screen_width  = default_screen_width  = best_mode->width;
+        screen_height = default_screen_height = best_mode->height;
     }
 }
 
@@ -1566,7 +1780,7 @@ static void I_AutoAdjustSettings(void)
 
     if (fullscreen && !AutoAdjustFullscreen())
     {
-        fullscreen = 0;
+        fullscreen = default_fullscreen = 0;
     }
 
     // If we are running windowed, pick a valid window size.
@@ -1610,8 +1824,8 @@ static void SetScaleFactor(int factor)
         h = SCREENHEIGHT;
     }
 
-    screen_width = w * factor;
-    screen_height = h * factor;
+    screen_width  = default_screen_width  = w * factor;
+    screen_height = default_screen_height = h * factor;
 }
 
 void I_GraphicsCheckCommandLine(void)
@@ -1738,33 +1952,21 @@ void I_GraphicsCheckCommandLine(void)
 
     //!
     // @category video
-    // @arg <WxY>[wf]
+    // @arg <WxY>
     //
-    // Specify the dimensions of the window or fullscreen mode.  An
-    // optional letter of w or f appended to the dimensions selects
-    // windowed or fullscreen mode.
+    // Specify the screen mode (when running fullscreen) or the window
+    // dimensions (when running in windowed mode).
 
     i = M_CheckParmWithArgs("-geometry", 1);
 
     if (i > 0)
     {
-        int w, h, s;
-        char f;
+        int w, h;
 
-        s = sscanf(myargv[i + 1], "%ix%i%1c", &w, &h, &f);
-        if (s == 2 || s == 3)
+        if (sscanf(myargv[i + 1], "%ix%i", &w, &h) == 2)
         {
             screen_width = w;
             screen_height = h;
-
-            if (s == 3 && f == 'f')
-            {
-                fullscreen = true;
-            }
-            else if (s == 3 && f == 'w')
-            {
-                fullscreen = false;
-            }
         }
     }
 
@@ -1919,24 +2121,26 @@ static void SetVideoMode(screen_mode_t *mode, int w, int h)
     // If we are already running and in a true color mode, we need
     // to free the screenbuffer surface before setting the new mode.
 
+    // [SVE] svillarreal - from gl scale branch
     if (!using_opengl && screenbuffer != NULL && screen != screenbuffer)
     {
         SDL_FreeSurface(screenbuffer);
     }
 
-    // Perform screen scale setup before changing video mode.
+    // Generate lookup tables before setting the video mode.
 
-    if (!using_opengl && mode != NULL && mode->InitMode != NULL)
+    if (mode != NULL && mode->InitMode != NULL)
     {
         mode->InitMode(doompal);
     }
-
-    // Set the video mode.
 
     if (fullscreen)
     {
         flags |= SDL_FULLSCREEN;
     }
+    // [SVE] svillarreal - this is a huge hassle to support with
+    // the OpenGL context
+#if 0
     else
     {
         // In windowed mode, the window can be resized while the game is
@@ -1949,7 +2153,9 @@ static void SetVideoMode(screen_mode_t *mode, int w, int h)
             flags |= SDL_RESIZABLE;
         }
     }
+#endif
 
+    // [SVE] svillarreal - from gl scale branch
     if (using_opengl)
     {
         flags |= SDL_OPENGL;
@@ -1973,6 +2179,14 @@ static void SetVideoMode(screen_mode_t *mode, int w, int h)
                 w, h, screen_bpp, SDL_GetError());
     }
 
+    // [SVE] svillarreal
+    DEH_printf("GL_Init: Initializing OpenGL extensions\n");
+    GL_Init();
+
+    DEH_printf("RB_Init: Initializing OpenGL render backend\n");
+    RB_Init();
+
+    // [SVE] svillarreal - from gl scale branch
     if (using_opengl)
     {
         // Try to initialize OpenGL scaling backend. This can fail,
@@ -2066,8 +2280,8 @@ static void ApplyWindowResize(unsigned int w, unsigned int h)
 
     // Save settings.
 
-    screen_width = mode->width;
-    screen_height = mode->height;
+    screen_width  = default_screen_width  = mode->width;
+    screen_height = default_screen_height = mode->height;
 }
 
 void I_InitGraphics(void)
@@ -2105,8 +2319,11 @@ void I_InitGraphics(void)
     // has to be done before the call to SDL_SetVideoMode.
 
     I_InitWindowTitle();
+    
+#ifndef __MACOSX__
 #if !SDL_VERSION_ATLEAST(1, 3, 0)
     I_InitWindowIcon();
+#endif
 #endif
 
     // Warning to OS X users... though they might never see it :(
@@ -2118,12 +2335,16 @@ void I_InitGraphics(void)
     }
 #endif
 
+    // [SVE] svillarreal - from gl scale branch
     // If we're using OpenGL, call the preinit function now; if it fails
     // then we have to fall back to software mode.
 
-    if (using_opengl && !I_GL_PreInit())
+    if (using_opengl && !GL_PreInit())
     {
         using_opengl = false;
+        // [SVE] svillarreal - OpenGL must be supported
+        I_Error("Failed to initialize OpenGL");
+        return;
     }
 
     //
@@ -2258,15 +2479,17 @@ void I_BindVideoVariables(void)
 {
     M_BindVariable("use_mouse",                 &usemouse);
     M_BindVariable("autoadjust_video_settings", &autoadjust_video_settings);
-    M_BindVariable("fullscreen",                &fullscreen);
     M_BindVariable("aspect_ratio_correct",      &aspect_ratio_correct);
     M_BindVariable("startup_delay",             &startup_delay);
-    M_BindVariable("screen_width",              &screen_width);
-    M_BindVariable("screen_height",             &screen_height);
+    M_BindVariable("screen_init",               &screen_init);
     M_BindVariable("screen_bpp",                &screen_bpp);
     M_BindVariable("grabmouse",                 &grabmouse);
     M_BindVariable("mouse_acceleration",        &mouse_acceleration);
     M_BindVariable("mouse_threshold",           &mouse_threshold);
+    M_BindVariable("mouse_scale",               &mouse_scale);
+    M_BindVariable("mouse_invert",              &mouse_invert);
+    M_BindVariable("mouse_enable_acceleration", &mouse_enable_acceleration);
+    M_BindVariable("mouse_smooth",              &mouse_smooth);
     M_BindVariable("video_driver",              &video_driver);
     M_BindVariable("window_position",           &window_position);
     M_BindVariable("usegamma",                  &usegamma);
@@ -2274,6 +2497,11 @@ void I_BindVideoVariables(void)
     M_BindVariable("novert",                    &novert);
     M_BindVariable("gl_max_scale",              &gl_max_scale);
     M_BindVariable("png_screenshots",           &png_screenshots);
+
+    // [SVE]
+    M_BindVariableWithDefault("fullscreen",    &fullscreen,    &default_fullscreen);
+    M_BindVariableWithDefault("screen_width",  &screen_width,  &default_screen_width);
+    M_BindVariableWithDefault("screen_height", &screen_height, &default_screen_height);
 
     // Windows Vista or later?  Set screen color depth to
     // 32 bits per pixel, as 8-bit palettized screen modes
@@ -2300,8 +2528,9 @@ void I_BindVideoVariables(void)
     // where some old versions of OS X (<= Snow Leopard) crash.
 
 #ifdef __MACOSX__
-    fullscreen = 0;
-    screen_width = 800;
-    screen_height = 600;
+    fullscreen    = default_fullscreen    = 0;
+    screen_width  = default_screen_width  = 800;
+    screen_height = default_screen_height = 600;
+    screen_init = true;
 #endif
 }

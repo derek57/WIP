@@ -42,7 +42,7 @@ static struct
     { heretic,   registered, 3, 9 },
     { heretic,   retail,     5, 9 },
     { hexen,     commercial, 1, 60 },
-    { strife,    commercial, 1, 34 },
+    { strife,    commercial, 1, 38 }, // [SVE]
 };
 
 // Check that a gamemode+gamemission received over the network is valid.

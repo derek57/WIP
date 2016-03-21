@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -53,7 +54,8 @@
 #include <CoreFoundation/CFUserNotification.h>
 #endif
 
-#define DEFAULT_RAM 16 /* MiB */
+// haleyjd 20140831: [SVE] increase default heap size
+#define DEFAULT_RAM 32 /* MiB */
 #define MIN_RAM     4  /* MiB */
 
 
@@ -191,10 +193,8 @@ void I_PrintStartupBanner(char *gamedescription)
     I_PrintDivider();
     
     printf(
-    " " PACKAGE_NAME " is free software, covered by the GNU General Public\n"
-    " License.  There is NO warranty; not even for MERCHANTABILITY or FITNESS\n"
-    " FOR A PARTICULAR PURPOSE. You are welcome to change and distribute\n"
-    " copies under certain conditions. See the source for more information.\n");
+    " The " PACKAGE_NAME " program code is free software, available under the "
+    " GNU General Public License. See SRCLICENSE.TXT for more information.\n");
 
     I_PrintDivider();
 }
@@ -250,8 +250,6 @@ void I_Quit (void)
         entry->func();
         entry = entry->next;
     }
-
-    SDL_Quit();
 
     exit(0);
 }
@@ -445,8 +443,6 @@ void I_Error (char *error, ...)
 #endif
 
     // abort();
-
-    SDL_Quit();
 
     exit(-1);
 }

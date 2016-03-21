@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -35,7 +36,6 @@ boolean M_StrToInt(const char *str, int *result);
 void M_ExtractFileBase(char *path, char *dest);
 void M_ForceUppercase(char *text);
 char *M_StrCaseStr(char *haystack, char *needle);
-char *M_StringDuplicate(const char *orig);
 boolean M_StringCopy(char *dest, const char *src, size_t dest_size);
 boolean M_StringConcat(char *dest, const char *src, size_t dest_size);
 char *M_StringReplace(const char *haystack, const char *needle,
@@ -46,6 +46,11 @@ boolean M_StringEndsWith(const char *s, const char *suffix);
 int M_vsnprintf(char *buf, size_t buf_len, const char *s, va_list args);
 int M_snprintf(char *buf, size_t buf_len, const char *s, ...);
 char *M_OEMToUTF8(const char *ansi);
+
+// haleyjd: [SVE]
+int M_ReadFileAsString(const char *name, char **buffer);
+char *M_Itoa(int value, char *string, int radix);
+char *M_Strdup(const char *str);
 
 #endif
 

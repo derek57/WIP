@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -23,6 +24,7 @@
 
 #include "d_event.h"
 #include "d_loop.h"
+#include "d_main.h"
 #include "d_ticcmd.h"
 
 #include "i_system.h"
@@ -40,7 +42,17 @@
 #include "net_sdl.h"
 #include "net_loop.h"
 
+// [SVE]
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
+#include "net_steamworks.h"
+
+#include "rb_config.h"
+
 // The complete set of data for a particular tic.
+
+extern boolean d_interpolate;
 
 typedef struct
 {
@@ -133,6 +145,10 @@ static int GetAdjustedTime(void)
     return (time_ms * TICRATE) / 1000;
 }
 
+// [SVE]: try increasing time allowed to get ahead
+//#define GET_AHEAD_TICS 5
+#define GET_AHEAD_TICS 20
+
 static boolean BuildNewTic(void)
 {
     int	gameticdiv;
@@ -169,7 +185,7 @@ static boolean BuildNewTic(void)
     }
     else
     {
-       if (maketic - gameticdiv >= 5)
+       if (maketic - gameticdiv >= GET_AHEAD_TICS) // [SVE]
            return false;
     }
 
@@ -316,6 +332,11 @@ static void BlockUntilStart(net_gamesettings_t *settings,
 {
     while (!NET_CL_GetSettings(settings))
     {
+#if defined(_USE_STEAM_)
+        // RUN CALLBACKS
+        I_SteamUpdate();
+#endif
+
         NET_CL_Run();
         NET_SV_Run();
 
@@ -329,6 +350,12 @@ static void BlockUntilStart(net_gamesettings_t *settings,
         {
             I_Error("Netgame startup aborted.");
         }
+
+        // haleyjd 20141023: [SVE] If playing a Steam netgame, put on a show that
+        // matches what's happening on the server side. Graphics are already 
+        // initialized vis-a-vis the frontend lobby bringing us here.
+        if(net_SteamGame)
+            NET_RenderSteamServerStart();
 
         I_Sleep(100);
     }
@@ -353,17 +380,18 @@ void D_StartNetGame(net_gamesettings_t *settings,
     // sync code. This is currently disabled by default because it
     // has some bugs.
     //
-    if (M_CheckParm("-newsync") > 0)
-        settings->new_sync = 1;
-    else
-        settings->new_sync = 0;
 
-    // TODO: New sync code is not enabled by default because it's
-    // currently broken. 
-    //if (M_CheckParm("-oldsync") > 0)
-    //    settings->new_sync = 0;
-    //else
+    //if (M_CheckParm("-newsync") > 0)
     //    settings->new_sync = 1;
+    //else
+    //    settings->new_sync = 0;
+
+    // [SVE] 20141220: Apparently "newsync" is pretty much required for Internet play.
+    // Special thanks to Edward850 for diagnosing this with a bunch of testing.
+    if (M_CheckParm("-oldsync") > 0)
+        settings->new_sync = 0;
+    else
+        settings->new_sync = 1;
 
     //!
     // @category net
@@ -447,6 +475,53 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
     player_class = connect_data->player_class;
 
 #ifdef FEATURE_MULTIPLAYER
+
+#ifdef _USE_STEAM_
+    // RUN CALLBACKS
+    I_SteamUpdate();
+
+    // haleyjd 20141022: [SVE]
+    // Are we marked to start a Steam-negotiated netgame? This may be a pure UDP
+    // connection, a NAT-puncher-assisted tunnel, or an indirect connection
+    // through the Steam servers. Doesn't matter to us at any point.
+    if(net_SteamGame)
+    {
+        switch(net_SteamNodeType)
+        {
+        case NET_STEAM_SERVER:
+            NET_SV_Init();
+            NET_SV_AddModule(&net_loop_server_module);
+            NET_SV_AddModule(&net_steamworks_module);
+            net_loop_client_module.InitClient();
+            addr = net_loop_client_module.ResolveAddress(NULL);
+            break;
+        case NET_STEAM_CLIENT:
+            net_steamworks_module.InitClient();
+            addr = net_steamworks_module.ResolveAddress(net_SteamServerID);
+            break;
+        default:
+            I_Error("Unknown Steam netgame client state %d", net_SteamNodeType);
+        }
+
+        // RUN CALLBACKS
+        I_SteamUpdate();
+
+        if(addr)
+        {
+            if(!NET_CL_Connect(addr, connect_data))
+                I_Error("Failed to connect Steam client to server");
+            
+            NET_WaitForSteamLaunch();
+            
+            result = true;
+        }
+
+        // RUN CALLBACKS
+        I_SteamUpdate();
+
+        return result;
+    }
+#endif
 
     //!
     // @category net
@@ -695,6 +770,8 @@ void TryRunTics (void)
     int realtics;
     int	availabletics;
     int	counts;
+    boolean caninterpolate = (gametic > 0 && d_interpolate); // haleyjd
+    boolean dosleep = !d_fpslimit;
 
     // get real tics
     entertic = I_GetTime() / ticdup;
@@ -733,6 +810,14 @@ void TryRunTics (void)
         else
             counts = availabletics;
 
+        // haleyjd 20140902: [SVE] interpolation
+        if(counts <= 0 && caninterpolate)
+        {
+            if(dosleep)
+                I_Sleep(1);
+            return;
+        }
+
         if (counts < 1)
             counts = 1;
 
@@ -740,6 +825,14 @@ void TryRunTics (void)
         {
             OldNetSync();
         }
+    }
+
+    // haleyjd 20140902: [SVE] interpolation
+    if(counts <= 0 && caninterpolate)
+    {
+        if(dosleep)
+            I_Sleep(1);
+        return;
     }
 
     if (counts < 1)
@@ -759,14 +852,16 @@ void TryRunTics (void)
         // Don't stay in this loop forever.  The menu is still running,
         // so return to update the screen
 
-	if (I_GetTime() / ticdup - entertic > 0)
-	{
+	if (caninterpolate || I_GetTime() / ticdup - entertic > 0)
+        {
+            if(dosleep)
+                I_Sleep(1);
 	    return;
-	}
+        }
 
         I_Sleep(1);
     }
-
+    
     // run the count * ticdup dics
     while (counts--)
     {
@@ -788,6 +883,7 @@ void TryRunTics (void)
 	{
             if (gametic/ticdup > lowtic)
                 I_Error ("gametic>lowtic");
+            I_TimerSaveMS(); // [SVE] interpolation
 
             memcpy(local_playeringame, set->ingame, sizeof(local_playeringame));
 

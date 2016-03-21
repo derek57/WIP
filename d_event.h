@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -35,7 +36,12 @@ typedef enum
     ev_keyup,
     ev_mouse,
     ev_joystick,
-    ev_quit
+    ev_quit,
+
+    // [SVE] svillarreal
+    ev_mousebutton,
+    ev_joybtndown,
+    ev_joybtnup,
 } evtype_t;
 
 // Event structure.
@@ -53,16 +59,22 @@ typedef struct
     //           while shift was held).
     //
     // ev_mouse:
-    //    data1: Bitfield of buttons currently held down.
-    //           (bit 0 = left; bit 1 = right; bit 2 = middle).
     //    data2: X axis mouse movement (turn).
     //    data3: Y axis mouse movement (forward/backward).
     //
+    // ev_mousebutton:
+    //    data1: Bitfield of buttons currently held down.
+    //           (bit 0 = left; bit 1 = right; bit 2 = middle).
+    //
     // ev_joystick:
-    //    data1: Bitfield of buttons currently pressed.
+    //    data1: Fourth axis movement (looking up/down)
     //    data2: X axis mouse movement (turn).
     //    data3: Y axis mouse movement (forward/backward).
     //    data4: Third axis mouse movement (strafe).
+    //
+    // ev_joybtndown/ev_joybtnup
+    //    data1: Bitfield of buttons currently held down.
+    //
 
     int data1, data2, data3, data4;
 } event_t;
@@ -117,6 +129,8 @@ typedef enum
     BT2_INVDROP         = 16,
     // Jump up and down
     BT2_JUMP            = 32,
+    // [SVE]: If this bit is set, client has full 3D look range
+    BT2_LOOKRANGE       = 64,
     // Use medkit
     BT2_HEALTH          = 128,
   

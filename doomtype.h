@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -20,6 +21,12 @@
 
 #ifndef __DOOMTYPE__
 #define __DOOMTYPE__
+
+// [SVE] svillarreal - disable annoying compiler warnings
+
+#pragma warning (disable : 4018) // signed/unsigned mismatch warnings
+#pragma warning (disable : 4244) // conversion #x to #y: possible loss of data
+#pragma warning (disable : 4305) // truncation from #x to #y
 
 // #define macros to provide functions missing in Windows.
 // Outside Windows, we use strings.h for str[n]casecmp.
@@ -80,6 +87,9 @@ typedef enum
 
 typedef uint8_t byte;
 
+// [SVE] svillarreal - word type
+typedef uint16_t word;
+
 #include <limits.h>
 
 #ifdef _WIN32
@@ -97,6 +107,18 @@ typedef uint8_t byte;
 #endif
 
 #define arrlen(array) (sizeof(array) / sizeof(*array))
+
+#ifndef MAX
+#define MAX(a,b) ((a)>(b)?(a):(b))
+#endif
+
+#ifndef MIN
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+
+#ifndef BETWEEN
+#define BETWEEN(l,u,x) ((l)>(x)?(l):(x)>(u)?(u):(x))
+#endif
 
 #endif
 

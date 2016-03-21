@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -83,46 +84,6 @@ unsigned int W_LumpNameHash(const char *s)
     return result;
 }
 
-// Increase the size of the lumpinfo[] array to the specified size.
-static void ExtendLumpInfo(int newnumlumps)
-{
-    lumpinfo_t *newlumpinfo;
-    unsigned int i;
-
-    newlumpinfo = calloc(newnumlumps, sizeof(lumpinfo_t));
-
-    if (newlumpinfo == NULL)
-    {
-	I_Error ("Couldn't realloc lumpinfo");
-    }
-
-    // Copy over lumpinfo_t structures from the old array. If any of
-    // these lumps have been cached, we need to update the user
-    // pointers to the new location.
-    for (i = 0; i < numlumps && i < newnumlumps; ++i)
-    {
-        memcpy(&newlumpinfo[i], &lumpinfo[i], sizeof(lumpinfo_t));
-
-        if (newlumpinfo[i].cache != NULL)
-        {
-            Z_ChangeUser(newlumpinfo[i].cache, &newlumpinfo[i].cache);
-        }
-
-        // We shouldn't be generating a hash table until after all WADs have
-        // been loaded, but just in case...
-        if (lumpinfo[i].next != NULL)
-        {
-            int nextlumpnum = lumpinfo[i].next - lumpinfo;
-            newlumpinfo[i].next = &newlumpinfo[nextlumpnum];
-        }
-    }
-
-    // All done.
-    free(lumpinfo);
-    lumpinfo = newlumpinfo;
-    numlumps = newnumlumps;
-}
-
 //
 // LUMP BASED ROUTINES.
 //
@@ -146,20 +107,19 @@ wad_file_t *W_AddFile (char *filename)
     int startlump;
     filelump_t *fileinfo;
     filelump_t *filerover;
-    int newnumlumps;
-
+    
     // open the file and add to directory
 
     wad_file = W_OpenFile(filename);
-
+		
     if (wad_file == NULL)
     {
 	printf (" couldn't open %s\n", filename);
 	return NULL;
     }
 
-    newnumlumps = numlumps;
-
+    startlump = numlumps;
+	
     if (strcasecmp(filename+strlen(filename)-3 , "wad" ) )
     {
 	// single lump file
@@ -177,7 +137,7 @@ wad_file_t *W_AddFile (char *filename)
         // extension).
 
 	M_ExtractFileBase (filename, fileinfo->name);
-	newnumlumps++;
+	numlumps++;
     }
     else 
     {
@@ -202,15 +162,19 @@ wad_file_t *W_AddFile (char *filename)
 	fileinfo = Z_Malloc(length, PU_STATIC, 0);
 
         W_Read(wad_file, header.infotableofs, fileinfo, length);
-	newnumlumps += header.numlumps;
+	numlumps += header.numlumps;
     }
 
-    // Increase size of numlumps array to accomodate the new file.
-    startlump = numlumps;
-    ExtendLumpInfo(newnumlumps);
+    // Fill in lumpinfo
+    lumpinfo = realloc(lumpinfo, numlumps * sizeof(lumpinfo_t));
+
+    if (lumpinfo == NULL)
+    {
+	I_Error ("Couldn't realloc lumpinfo");
+    }
 
     lump_p = &lumpinfo[startlump];
-
+	
     filerover = fileinfo;
 
     for (i=startlump; i<numlumps; ++i)
@@ -224,7 +188,7 @@ wad_file_t *W_AddFile (char *filename)
         ++lump_p;
         ++filerover;
     }
-
+	
     Z_Free(fileinfo);
 
     if (lumphash != NULL)
@@ -608,4 +572,34 @@ void W_CheckCorrectIWAD(GameMission_t mission)
         }
     }
 }
+
+//
+// [SVE]
+// Get the wad_file_t for a lump by name.
+// Returns NULL if not found.
+//
+wad_file_t *W_WadFileForLumpName(const char *name)
+{
+    int lumpnum;
+    
+    if((lumpnum = W_CheckNumForName((char *)name)) <= 0)
+        return NULL;
+    
+    return lumpinfo[lumpnum].wad_file;
+}
+
+//
+// [SVE]
+// Get the wad_file_t for a lump by number.
+// Returns NULL if lumpnum is invalid.
+//
+wad_file_t *W_WadFileForLumpNum(int lumpnum)
+{
+    if(lumpnum < 0 || (unsigned int)lumpnum >= numlumps)
+        return NULL;
+
+    return lumpinfo[lumpnum].wad_file;
+}
+
+// EOF
 

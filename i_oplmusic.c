@@ -46,6 +46,9 @@
 
 #define PERCUSSION_LOG_LEN 16
 
+// TODO: Figure out why this is needed.
+#define TEMPO_FUDGE_FACTOR 260
+
 typedef struct
 {
     byte tremolo;
@@ -958,21 +961,6 @@ static void SetChannelVolume(opl_channel_data_t *channel, unsigned int volume)
     }
 }
 
-// Handler for the MIDI_CONTROLLER_ALL_NOTES_OFF channel event.
-static void AllNotesOff(opl_channel_data_t *channel, unsigned int param)
-{
-    unsigned int i;
-
-    for (i = 0; i < OPL_NUM_VOICES; ++i)
-    {
-        if (voices[i].channel == channel)
-        {
-            VoiceKeyOff(&voices[i]);
-            ReleaseVoice(&voices[i]);
-        }
-    }
-}
-
 static void ControllerEvent(opl_track_data_t *track, midi_event_t *event)
 {
     unsigned int controller;
@@ -994,10 +982,6 @@ static void ControllerEvent(opl_track_data_t *track, midi_event_t *event)
     {
         case MIDI_CONTROLLER_MAIN_VOLUME:
             SetChannelVolume(channel, param);
-            break;
-
-        case MIDI_CONTROLLER_ALL_NOTES_OFF:
-            AllNotesOff(channel, param);
             break;
 
         default:
@@ -1195,7 +1179,8 @@ static void ScheduleTrack(opl_track_data_t *track)
     // Get the number of microseconds until the next event.
 
     nticks = MIDI_GetDeltaTime(track->iter);
-    us = ((uint64_t) nticks * us_per_beat) / ticks_per_beat;
+    us = ((uint64_t) nticks * us_per_beat * TEMPO_FUDGE_FACTOR)
+       / ticks_per_beat;
 
     // Set a timer to be invoked when the next event is
     // ready to play.
