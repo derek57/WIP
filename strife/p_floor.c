@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -34,6 +35,30 @@
 //
 // FLOORS
 //
+
+//
+// P_SyncFastSectorHeights
+//
+// [SVE] svillarreal - keep fast sector positions
+// in sync for interpolation mode
+//
+
+static void P_SyncFastSectorHeights(sector_t *sector, fixed_t speed, int floorOrCeiling)
+{
+    if(speed >= (128*FRACUNIT))
+    {
+        int secnum = sector - sectors;
+
+        if(floorOrCeiling)
+        {
+            sectorinterps[secnum].prevceilingheight = sector->ceilingheight;
+        }
+        else
+        {
+            sectorinterps[secnum].prevfloorheight = sector->floorheight;
+        }
+    }
+}
 
 //
 // Move a plane (floor or ceiling) and check for crushing
@@ -75,6 +100,7 @@ T_MovePlane
                     P_ChangeSector(sector,crush);
                     //return crushed;
                 }*/
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                 return pastdest;
             }
             else
@@ -91,6 +117,7 @@ T_MovePlane
                     P_ChangeSector(sector,crush);
                     return crushed;
                 }*/
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                 return ok;
              }
              break;
@@ -102,10 +129,13 @@ T_MovePlane
                 lastpos = sector->floorheight;
                 sector->floorheight = dest;
                 flag = P_ChangeSector(sector,crush);
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
+
                 if (flag == true)
                 {
                     sector->floorheight = lastpos;
                     P_ChangeSector(sector,crush);
+                    P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                     //return crushed;
                 }
                 return pastdest;
@@ -116,6 +146,8 @@ T_MovePlane
                 lastpos = sector->floorheight;
                 sector->floorheight += speed;
                 flag = P_ChangeSector(sector,crush);
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
+
                 if (flag == true)
                 {
                     // haleyjd 20130210: Bug fix - Strife DOES do this.
@@ -123,6 +155,7 @@ T_MovePlane
                         return crushed;
                     sector->floorheight = lastpos;
                     P_ChangeSector(sector,crush);
+                    P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                     return crushed;
                 }
                 else
@@ -143,11 +176,13 @@ T_MovePlane
                 lastpos = sector->ceilingheight;
                 sector->ceilingheight = dest;
                 flag = P_ChangeSector(sector,crush);
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
 
                 if (flag == true)
                 {
                     sector->ceilingheight = lastpos;
                     P_ChangeSector(sector,crush);
+                    P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                     //return crushed;
                 }
                 return pastdest;
@@ -158,6 +193,7 @@ T_MovePlane
                 lastpos = sector->ceilingheight;
                 sector->ceilingheight -= speed;
                 flag = P_ChangeSector(sector,crush);
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
 
                 if (flag == true)
                 {
@@ -165,6 +201,7 @@ T_MovePlane
                         return crushed;
                     sector->ceilingheight = lastpos;
                     P_ChangeSector(sector,crush);
+                    P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                     return crushed;
                 }
             }
@@ -186,6 +223,7 @@ T_MovePlane
                     P_ChangeSector(sector,crush);
                     //return crushed;
                 }*/
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                 return pastdest;
             }
             else
@@ -196,6 +234,7 @@ T_MovePlane
 
                 // villsa [STRIFE] unused
                 //flag = P_ChangeSector(sector,crush);
+                P_SyncFastSectorHeights(sector, speed, floorOrCeiling);
                 return ok;
             }
             break;
@@ -522,14 +561,16 @@ EV_BuildStairs
         rtn = 1;
         floor = Z_Malloc (sizeof(*floor), PU_LEVSPEC, 0);
         P_AddThinker (&floor->thinker);
-        sec->tag = 0; // haleyjd 20140919: [STRIFE] clears tag of first stair sector
+        sec->tag = 0; // haleyjd 20140919: [STRIFE] zeroes tag
         sec->specialdata = floor;
         floor->thinker.function.acp1 = (actionf_p1) T_MoveFloor;
-        floor->direction = direction; // haleyjd 20140919: bug fix: direction, not "1"
+        floor->direction = direction; // haleyjd 20140919: [STRIFE] bug fix
         floor->sector = sec;
+        floor->type = buildStair; // haleyjd [SVE]: initialize type
         floor->speed = speed;
         height = sec->floorheight + stairsize;
         floor->floordestheight = height;
+        floor->crush = false; // haleyjd [SVE]: initialize crush
 
         texture = sec->floorpic;
 
@@ -556,10 +597,14 @@ EV_BuildStairs
                 if (tsec->floorpic != texture)
                     continue;
 
-                height += stairsize;
+                // [SVE]: double stair size fix
+                //height += stairsize;
 
                 if (tsec->specialdata)
                     continue;
+
+                // [SVE]: double stair size fix
+                height += stairsize;
 
                 sec = tsec;
                 secnum = newsecnum;
@@ -573,6 +618,8 @@ EV_BuildStairs
                 floor->sector = sec;
                 floor->speed = speed;
                 floor->floordestheight = height;
+                floor->type = buildStair; // haleyjd [SVE]: initialize type
+                floor->crush = false; // haleyjd [SVE]: initialize crush
                 ok = 1;
                 break;
             }

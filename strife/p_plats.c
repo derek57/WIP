@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -34,10 +35,10 @@
 // Data.
 #include "sounds.h"
 
-
-plat_t* activeplats[MAXPLATS];
-
-
+// haleyjd 20140816: [SVE] remove activeplats limit
+plat_t **activeplats;
+int numactiveplats;
+int numactiveplatsalloc;
 
 //
 // Move a plat up and down
@@ -181,6 +182,10 @@ int EV_DoPlat(line_t* line, plattype_e type, int amount)
         plat->crush = false;
         plat->tag = line->tag;
 
+        // haleyjd 20141001 [SVE]: protect against uninitialized plat->low 
+        // causing bounced plats that descend forever
+        plat->low = sec->floorheight;
+
         switch(type)
         {
         case raiseToNearestAndChange:
@@ -288,15 +293,16 @@ void P_ActivateInStasis(int tag)
 {
     int i;
 
-    for(i = 0; i < MAXPLATS; i++)
-        if(activeplats[i]
-        && (activeplats[i])->tag == tag
-            && (activeplats[i])->status == in_stasis)
+    for(i = 0; i < numactiveplats; i++)
+    {
+        if(activeplats[i] && 
+           (activeplats[i])->tag == tag && 
+           (activeplats[i])->status == in_stasis)
         {
             (activeplats[i])->status = (activeplats[i])->oldstatus;
-            (activeplats[i])->thinker.function.acp1
-                = (actionf_p1)T_PlatRaise;
+            (activeplats[i])->thinker.function.acp1 = (actionf_p1)T_PlatRaise;
         }
+    }
 }
 
 //
@@ -306,15 +312,17 @@ void EV_StopPlat(line_t* line)
 {
     int j;
 
-    for(j = 0; j < MAXPLATS; j++)
-        if (activeplats[j]
-        && ((activeplats[j])->status != in_stasis)
-            && ((activeplats[j])->tag == line->tag))
+    for(j = 0; j < numactiveplats; j++)
+    {
+        if (activeplats[j] && 
+            ((activeplats[j])->status != in_stasis) &&
+            ((activeplats[j])->tag == line->tag))
         {
             (activeplats[j])->oldstatus = (activeplats[j])->status;
             (activeplats[j])->status = in_stasis;
             (activeplats[j])->thinker.function.acv = (actionf_v)NULL;
         }
+    }
 }
 
 //
@@ -324,14 +332,25 @@ void P_AddActivePlat(plat_t* plat)
 {
     int i;
 
-    for(i = 0; i < MAXPLATS; i++)
-        if (activeplats[i] == NULL)
+    for(i = 0; i < numactiveplats; i++)
+    {
+        if(activeplats[i] == NULL)
         {
             activeplats[i] = plat;
             return;
-        }
-
-        I_Error("P_AddActivePlat: no more plats!");
+        }    
+    }
+    
+    // haleyjd 20140816: [SVE] remove activeplats limit
+    if(numactiveplats == numactiveplatsalloc)
+    {
+        numactiveplatsalloc = 
+            numactiveplatsalloc ? 2*numactiveplatsalloc : MAXPLATS;
+        activeplats = Z_Realloc(activeplats, 
+                                numactiveplatsalloc * sizeof(plat_t *),
+                                PU_STATIC, NULL);
+    }
+    activeplats[numactiveplats++] = plat;
 }
 
 //
@@ -340,15 +359,19 @@ void P_AddActivePlat(plat_t* plat)
 void P_RemoveActivePlat(plat_t* plat)
 {
     int i;
-    for(i = 0; i < MAXPLATS; i++)
+    
+    // haleyjd 20140816: [SVE] remove activeplats limit
+    for(i = 0; i < numactiveplats; i++)
+    {
         if(plat == activeplats[i])
         {
-            (activeplats[i])->sector->specialdata = NULL;
-            P_RemoveThinker(&(activeplats[i])->thinker);
+            activeplats[i]->sector->specialdata = NULL;
+            P_RemoveThinker(&(activeplats[i]->thinker));
             activeplats[i] = NULL;
-
             return;
         }
+    }
 
-        I_Error("P_RemoveActivePlat: can't find plat!");
+    // haleyjd 20140816: [SVE] stability
+    //I_Error("P_RemoveActivePlat: can't find plat!");
 }

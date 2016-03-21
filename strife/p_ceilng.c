@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -34,8 +35,10 @@
 // CEILINGS
 //
 
-
-ceiling_t*	activeceilings[MAXCEILINGS];
+// haleyjd 20140817: [SVE] remove activeceilings limit
+ceiling_t **activeceilings;
+int numactiveceilings;
+int numactiveceilingsalloc;
 
 
 //
@@ -227,7 +230,8 @@ EV_DoCeiling
             // [STRIFE] haleyjd 20130209: Turns out these types do NOT crush
             // in Strife... yeah, that makes a lot of sense. Thanks to Gez for
             // having detected this difference.
-            //ceiling->crush = true;
+            if(!classicmode) // [SVE]: fix this outside classicmode
+                ceiling->crush = true;
             ceiling->topheight = sec->ceilingheight;
 
         case lowerToFloor:
@@ -258,16 +262,27 @@ EV_DoCeiling
 //
 void P_AddActiveCeiling(ceiling_t* c)
 {
-    int		i;
-    
-    for (i = 0; i < MAXCEILINGS;i++)
+    int i;
+
+    for(i = 0; i < numactiveceilings; i++)
     {
-	if (activeceilings[i] == NULL)
-	{
-	    activeceilings[i] = c;
-	    return;
-	}
+        if(activeceilings[i] == NULL)
+        {
+            activeceilings[i] = c;
+            return;
+        }
     }
+
+    // haleyjd 20140817: [SVE] remove activeceilings limit
+    if(numactiveceilings == numactiveceilingsalloc)
+    {
+        numactiveceilingsalloc = 
+            numactiveceilingsalloc ? 2*numactiveceilingsalloc : MAXCEILINGS;
+        activeceilings = Z_Realloc(activeceilings, 
+                                   numactiveceilingsalloc * sizeof(ceiling_t *),
+                                   PU_STATIC, NULL);
+    }
+    activeceilings[numactiveceilings++] = c;
 }
 
 
@@ -277,17 +292,17 @@ void P_AddActiveCeiling(ceiling_t* c)
 //
 void P_RemoveActiveCeiling(ceiling_t* c)
 {
-    int		i;
-	
-    for (i = 0;i < MAXCEILINGS;i++)
+    int i;
+
+    for(i = 0; i < numactiveceilings; i++)
     {
-	if (activeceilings[i] == c)
-	{
-	    activeceilings[i]->sector->specialdata = NULL;
-	    P_RemoveThinker (&activeceilings[i]->thinker);
-	    activeceilings[i] = NULL;
-	    break;
-	}
+        if (activeceilings[i] == c)
+        {
+            activeceilings[i]->sector->specialdata = NULL;
+            P_RemoveThinker (&activeceilings[i]->thinker);
+            activeceilings[i] = NULL;
+            break;
+        }
     }
 }
 
@@ -298,18 +313,18 @@ void P_RemoveActiveCeiling(ceiling_t* c)
 //
 void P_ActivateInStasisCeiling(line_t* line)
 {
-    int		i;
-	
-    for (i = 0;i < MAXCEILINGS;i++)
+    int i;
+
+    for(i = 0; i < numactiveceilings; i++)
     {
-	if (activeceilings[i]
-	    && (activeceilings[i]->tag == line->tag)
-	    && (activeceilings[i]->direction == 0))
-	{
-	    activeceilings[i]->direction = activeceilings[i]->olddirection;
-	    activeceilings[i]->thinker.function.acp1
-	      = (actionf_p1)T_MoveCeiling;
-	}
+        if(activeceilings[i] && 
+            (activeceilings[i]->tag == line->tag) &&
+            (activeceilings[i]->direction == 0))
+        {
+            activeceilings[i]->direction = activeceilings[i]->olddirection;
+            activeceilings[i]->thinker.function.acp1
+                = (actionf_p1)T_MoveCeiling;
+        }
     }
 }
 
@@ -319,25 +334,23 @@ void P_ActivateInStasisCeiling(line_t* line)
 // EV_CeilingCrushStop
 // Stop a ceiling from crushing!
 //
-int	EV_CeilingCrushStop(line_t	*line)
+int EV_CeilingCrushStop(line_t *line)
 {
-    int		i;
-    int		rtn;
-	
-    rtn = 0;
-    for (i = 0;i < MAXCEILINGS;i++)
+    int i;
+    int rtn = 0;
+
+    for(i = 0; i < numactiveceilings; i++)
     {
-	if (activeceilings[i]
-	    && (activeceilings[i]->tag == line->tag)
-	    && (activeceilings[i]->direction != 0))
-	{
-	    activeceilings[i]->olddirection = activeceilings[i]->direction;
-	    activeceilings[i]->thinker.function.acv = (actionf_v)NULL;
-	    activeceilings[i]->direction = 0;		// in-stasis
-	    rtn = 1;
-	}
+        if(activeceilings[i] &&
+           (activeceilings[i]->tag == line->tag) &&
+           (activeceilings[i]->direction != 0))
+        {
+            activeceilings[i]->olddirection = activeceilings[i]->direction;
+            activeceilings[i]->thinker.function.acv = (actionf_v)NULL;
+            activeceilings[i]->direction = 0;		// in-stasis
+            rtn = 1;
+        }
     }
-    
 
     return rtn;
 }

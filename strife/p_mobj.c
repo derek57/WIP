@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -17,18 +18,24 @@
 //
 
 #include <stdio.h>
+#include <math.h>
 
 #include "i_system.h"
 #include "z_zone.h"
 #include "m_random.h"
 #include "doomdef.h"
 #include "p_local.h"
+#include "p_setup.h"
+#include "p_tick.h"
 #include "sounds.h"
 #include "st_stuff.h"
 #include "hu_stuff.h"
 #include "s_sound.h"
 #include "doomstat.h"
 #include "d_main.h"     // villsa [STRIFE]
+
+// [SVE] svillarreal
+#include "rb_decal.h"
 
 extern line_t *spechit[];  // haleyjd:
 extern int     numspechit; // [STRIFE] - needed in P_XYMovement
@@ -99,6 +106,40 @@ void P_ExplodeMissile (mobj_t* mo)
         S_StartSound (mo, mo->info->deathsound);
 }
 
+//
+// P_ProjectGrenadeBounce
+//
+// [SVE] svillarreal - new function
+// This achieves a much more accurate bounce for
+// grenades when impacting lines
+//
+
+static boolean P_ProjectGrenadeBounce(mobj_t *mo)
+{
+    fixed_t mx, my;
+    fixed_t dot;
+
+    if(!blockingline)
+    {
+        // must be a blocking line
+        return false;
+    }
+
+    mx = mo->momx;
+    my = mo->momy;
+
+    // get dot product plus additional force
+    dot = FixedMul(FixedMul(mx, blockingline->nx) + FixedMul(my, blockingline->ny), FRACUNIT*2);
+
+    // project momx/y
+    mo->momx = mx - FixedMul(blockingline->nx, dot);
+    mo->momy = my - FixedMul(blockingline->ny, dot);
+
+    mo->momx >>= 3;
+    mo->momy >>= 3;
+
+    return true;
+}
 
 //
 // P_XYMovement
@@ -154,7 +195,12 @@ void P_XYMovement (mobj_t* mo)
 
     do
     {
-        if (xmove > MAXMOVE/2 || ymove > MAXMOVE/2)
+        // [SVE] svillarreal
+        // Large negative displacements were never considered.
+        // This explains the tendency for certain projectiles
+        // to pass through walls.
+        if((xmove > MAXMOVE/2 || ymove > MAXMOVE/2) ||
+           (xmove < -MAXMOVE/2 || ymove < -MAXMOVE/2))
         {
             ptryx = mo->x + xmove/2;
             ptryy = mo->y + ymove/2;
@@ -168,8 +214,14 @@ void P_XYMovement (mobj_t* mo)
             xmove = ymove = 0;
         }
 
-        if (!P_TryMove (mo, ptryx, ptryy))
+        if(!P_TryMove (mo, ptryx, ptryy))
         {
+            // [SVE] svillarreal
+            if(blockingline && mo->info->flags2 & MF2_MARKDECAL)
+            {
+                RB_SpawnWallDecal(mo);
+            }
+
             // blocked move
             if (mo->player)
             {   // try to slide along it
@@ -178,13 +230,22 @@ void P_XYMovement (mobj_t* mo)
             // villsa [STRIFE] check for bouncy missiles
             else if(mo->flags & MF_BOUNCE)
             {
-                mo->momx >>= 3;
-                mo->momy >>= 3;
+                // [SVE] svillarreal - better grenade bounce
+                if(!P_ProjectGrenadeBounce(mo))
+                {
+                    // do the old fashioned way
+                    mo->momx >>= 3;
+                    mo->momy >>= 3;
 
-                if (P_TryMove(mo, mo->x - xmove, ymove + mo->y))
-                    mo->momy = -mo->momy;
-                else
-                    mo->momx = -mo->momx;
+                    if(P_TryMove(mo, mo->x - xmove, ymove + mo->y))
+                    {
+                        mo->momy = -mo->momy;
+                    }
+                    else
+                    {
+                        mo->momx = -mo->momx;
+                    }
+                }
 
                 xmove = 0;
                 ymove = 0;
@@ -217,7 +278,9 @@ void P_XYMovement (mobj_t* mo)
                 P_ExplodeMissile (mo);
             }
             else
+            {
                 mo->momx = mo->momy = 0;
+            }
         }
     } while (xmove || ymove);
     
@@ -296,7 +359,7 @@ void P_ZMovement (mobj_t* mo)
 {
     fixed_t	dist;
     fixed_t	delta;
-
+    
     // check for smooth step up
     if (mo->player && mo->z < mo->floorz)
     {
@@ -305,10 +368,15 @@ void P_ZMovement (mobj_t* mo)
         mo->player->deltaviewheight
             = (VIEWHEIGHT - mo->player->viewheight)>>3;
     }
-    
+
     // adjust height
+    // [SVE] svillarreal
+    if(mo->info->flags2 & MF2_NOTHINGBLOCK)
+    {
+        mo->z += mo->momz;
+    }
     // villsa [STRIFE] check for things standing on top of other things
-    if(!P_CheckPositionZ(mo, mo->z + mo->momz))
+    else if(!P_CheckPositionZ(mo, mo->z + mo->momz))
     {
         if(mo->momz >= 0)
             mo->ceilingz = mo->height + mo->z;
@@ -373,9 +441,22 @@ void P_ZMovement (mobj_t* mo)
 
                 // haleyjd 20110224: *Any* fall centers your view, not just
                 // damaging falls (moved outside the above if).
-                mo->player->centerview = 1;
+                
+                if(classicmode)
+                {
+                    // [SVE] svillarreal - don't center view if not playing classic mode
+                    mo->player->centerview = 1;
+                }
+                
                 S_StartSound (mo, sfx_oof);
             }
+
+            // [SVE] svillarreal
+            if(mo->info->flags2 & MF2_MARKDECAL)
+            {
+                RB_SpawnFloorDecal(mo, true);
+            }
+
             mo->momz = 0;
         }
         mo->z = mo->floorz;
@@ -422,8 +503,16 @@ void P_ZMovement (mobj_t* mo)
             }
 
             // hit the ceiling
-            if (mo->momz > 0)
+            if(mo->momz > 0)
+            {
                 mo->momz = 0;
+
+                // [SVE] svillarreal
+                if(mo->info->flags2 & MF2_MARKDECAL)
+                {
+                    RB_SpawnFloorDecal(mo, false);
+                }
+            }
 
             mo->z = mo->ceilingz - mo->height;
 
@@ -513,6 +602,21 @@ P_NightmareRespawn (mobj_t* mobj)
     P_RemoveMobj (mobj);
 }
 
+//
+// P_MobjBackupPosition
+//
+// haleyjd 20140902: [SVE] interpolation
+// Save the mobj's position data which is relevant to interpolation. Done
+// at the beginning of each gametic, and occasionally when the position of
+// an mobj is abruptly changed (such as when teleporting).
+//
+void P_MobjBackupPosition(mobj_t *mo)
+{
+    mo->prevpos.x     = mo->x;
+    mo->prevpos.y     = mo->y;
+    mo->prevpos.z     = mo->z;
+    mo->prevpos.angle = mo->angle; // NB: only used for player objects
+}
 
 //
 // P_MobjThinker
@@ -524,6 +628,11 @@ P_NightmareRespawn (mobj_t* mobj)
 //
 void P_MobjThinker (mobj_t* mobj)
 {
+    // haleyjd 20140902: [SVE] backup current position at start of frame;
+    // note players do this for themselves in P_PlayerThink.
+    if(!mobj->player || mobj->player->mo != mobj)
+        P_MobjBackupPosition(mobj);
+
     // momentum movement
     if (mobj->momx
         || mobj->momy
@@ -531,8 +640,8 @@ void P_MobjThinker (mobj_t* mobj)
     {
         P_XYMovement (mobj);
 
-        // FIXME: decent NOP/NULL/Nil function pointer please.
-        if (mobj->thinker.function.acv == (actionf_v) (-1))
+        // [SVE]: changed comparison
+        if(mobj->thinker.function.acp1 == (actionf_p1)P_RemoveThinkerDelayed)
             return;     // mobj was removed
 
         // villsa [STRIFE] terrain clipping
@@ -545,10 +654,10 @@ void P_MobjThinker (mobj_t* mobj)
     if ( (mobj->z != mobj->floorz && !(mobj->flags & MF_NOGRAVITY)) // villsa [STRIFE]
         || mobj->momz )
     {
-        P_ZMovement (mobj);
+        P_ZMovement(mobj);
 
-        // FIXME: decent NOP/NULL/Nil function pointer please.
-        if (mobj->thinker.function.acv == (actionf_v) (-1))
+        // [SVE] changed comparison
+        if(mobj->thinker.function.acp1 == (actionf_p1)P_RemoveThinkerDelayed)
             return;     // mobj was removed
 
         // villsa [STRIFE] terrain clipping and sounds
@@ -570,9 +679,15 @@ void P_MobjThinker (mobj_t* mobj)
         mobj->tics--;
 
         // villsa [STRIFE] stonecold cheat
+        // haleyjd 20140818: [SVE] Exempt important things:
+        // * Shopkeepers
+        // * Peasants, Rebels, Beggars (Allies and NPCs)
+        // * Important Hostile NPCs (Macil, Oracle)
+        // * Quest stuff (Gate controls, Computer, Crystal, etc)
         if(stonecold)
         {
-            if(mobj->flags & MF_COUNTKILL)
+            if(mobj->flags & MF_COUNTKILL &&
+                !(mobj->info->flags2 & MF2_NOSTONECOLD))
                 P_DamageMobj(mobj, mobj, mobj, 10);
         }
 
@@ -604,6 +719,10 @@ void P_MobjThinker (mobj_t* mobj)
 
         // haleyjd [STRIFE]: NOTDMATCH things don't respawn
         if(mobj->flags & MF_NOTDMATCH)
+            return;
+
+        // [SVE] svillarreal - special case for crusaders respawning
+        if(!classicmode && mapwithspecialtags && mobj->type == MT_CRUSADER)
             return;
 
         P_NightmareRespawn (mobj);
@@ -661,7 +780,7 @@ P_SpawnMobj
     mobj->floorz = mobj->subsector->sector->floorheight;
     mobj->ceilingz = mobj->subsector->sector->ceilingheight;
 
-    if (z == ONFLOORZ)
+    if(z == ONFLOORZ)
     {
         mobj->z = mobj->floorz;
 
@@ -670,13 +789,14 @@ P_SpawnMobj
             mobj->flags |= MF_FEETCLIPPED;
 
     }
-    else if (z == ONCEILINGZ)
+    else if(z == ONCEILINGZ)
         mobj->z = mobj->ceilingz - mobj->info->height;
     else 
         mobj->z = z;
 
     mobj->thinker.function.acp1 = (actionf_p1)P_MobjThinker;
 
+    P_MobjBackupPosition(mobj); // [SVE] interpolation
     P_AddThinker (&mobj->thinker);
 
     return mobj;
@@ -729,6 +849,10 @@ void P_RemoveMobj (mobj_t* mobj)
     // stop any playing sound
     S_StopSound (mobj);
     
+    // [SVE]: nullify references to other objects
+    P_SetTarget(&mobj->target, NULL);
+    P_SetTarget(&mobj->tracer, NULL);
+
     // free block
     P_RemoveThinker ((thinker_t*)mobj);
 }
@@ -796,8 +920,49 @@ void P_RespawnSpecials (void)
     iquetail = (iquetail+1)&(ITEMQUESIZE-1);
 }
 
+//
+// P_AssignPlayerToTeam
+//
+// haleyjd 20140917: [SVE] Assign a spawning player to a Capture the Chalice
+// team. We want to balance the teams as best as possible.
+//
+void P_AssignPlayerToTeam(player_t *player)
+{
+    int i;
+    int bluecount = 0;
+    int redcount  = 0;
 
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        if(!playeringame[i])
+            continue;
+        if(player == &players[i])
+            continue;
+        if(players[i].allegiance == CTC_TEAM_BLUE || ctcprefteams[i] == PREF_TEAM_BLUE)
+            ++bluecount;
+        else if(players[i].allegiance == CTC_TEAM_RED || ctcprefteams[i] == PREF_TEAM_RED)
+            ++redcount;
+    }
 
+    if(ctcprefteams[player - players] == PREF_TEAM_BLUE)
+    {
+        player->allegiance = CTC_TEAM_BLUE;
+    }
+    else if(ctcprefteams[player - players] == PREF_TEAM_RED)
+    {
+        player->allegiance = CTC_TEAM_RED;
+    }
+    else
+    {
+        // assign player to team with fewest members
+        if(bluecount < redcount)
+            player->allegiance = CTC_TEAM_BLUE;
+        else if(redcount < bluecount)
+            player->allegiance = CTC_TEAM_RED;
+        else // Toss-up in case of odd # of players.
+            player->allegiance = (P_Random() & 1) ? CTC_TEAM_BLUE : CTC_TEAM_RED;
+    }
+}
 
 //
 // P_SpawnPlayer
@@ -835,12 +1000,20 @@ void P_SpawnPlayer(mapthing_t* mthing)
     mobj    = P_SpawnMobj (x,y,z, MT_PLAYER);
 
     // set color translations for player sprites
-    if(mthing->type > 1)
+    if(capturethechalice)
+    {
+        if(p->allegiance == CTC_TEAM_BLUE)
+            mobj->flags |= 7 << MF_TRANSSHIFT;
+        else
+            mobj->flags |= 1 << MF_TRANSSHIFT;
+    }
+    else if(mthing->type > 1)
         mobj->flags |= (mthing->type-1)<<MF_TRANSSHIFT;
 
     mobj->angle  = ANG45 * (mthing->angle/45);
     mobj->player = p;
     mobj->health = p->health;
+    P_MobjBackupPosition(mobj);
 
     p->mo               = mobj;
     p->playerstate      = PST_LIVE;	
@@ -851,6 +1024,12 @@ void P_SpawnPlayer(mapthing_t* mthing)
     p->extralight       = 0;
     p->fixedcolormap    = 0;
     p->viewheight       = VIEWHEIGHT;
+    p->viewz            = mobj->z + VIEWHEIGHT; // [SVE] interpolation
+    p->prevviewz        = p->viewz;
+    p->prevpitch        = p->pitch;
+
+    // [SVE] svillarreal
+    p->recoilpitch      = 0;
 
     // setup gun psprite
     P_SetupPsprites(p);
@@ -886,6 +1065,10 @@ void P_SpawnPlayer(mapthing_t* mthing)
         // wake up the heads up text
         HU_Start ();
     }
+
+    // haleyjd [SVE] 20140914: propagate this node's "cheating" state to consoleplayer
+    if(d_cheating && p == &players[consoleplayer])
+        HU_NotifyCheating(p);
 }
 
 
@@ -911,11 +1094,44 @@ void P_SpawnMapThing (mapthing_t* mthing)
     // count deathmatch start positions
     if (mthing->type == 11)
     {
-        if (deathmatch_p < &deathmatchstarts[10])
+        if(numdeathmatchstarts == numdmstartsalloc)
         {
-            memcpy (deathmatch_p, mthing, sizeof(*mthing));
-            deathmatch_p++;
+            numdmstartsalloc = numdmstartsalloc ? 2*numdmstartsalloc : MAX_DM_STARTS;
+            deathmatchstarts = 
+                Z_Realloc(deathmatchstarts, sizeof(mapthing_t) * numdmstartsalloc,
+                          PU_STATIC, NULL);
         }
+        deathmatchstarts[numdeathmatchstarts++] = *mthing;
+        return;
+    }
+
+    // haleyjd 20140917: [SVE] Capture the Chalice starts
+    // These are compatible with the Doom community CTF Standard:
+    // 5080 == Blue team start, 5081 == Red team start
+    if(mthing->type == 5080)
+    {
+        if(numctcbluestarts == numctcbluestartsalloc)
+        {
+            numctcbluestartsalloc = numctcbluestartsalloc ? 2*numctcbluestartsalloc : 8;
+            ctcbluestarts =
+                Z_Realloc(ctcbluestarts, sizeof(mapthing_t) * numctcbluestartsalloc,
+                          PU_STATIC, NULL);
+        }
+        ctcbluestarts[numctcbluestarts++] = *mthing;
+        capturethechalice = true; // we're in CTC (CTF) mode now
+        return;
+    }
+    if(mthing->type == 5081)
+    {
+        if(numctcredstarts == numctcredstartsalloc)
+        {
+            numctcredstartsalloc = numctcredstartsalloc ? 2*numctcredstartsalloc : 8;
+            ctcredstarts =
+                Z_Realloc(ctcredstarts, sizeof(mapthing_t) * numctcredstartsalloc,
+                          PU_STATIC, NULL);
+        }
+        ctcredstarts[numctcredstarts++] = *mthing;
+        capturethechalice = true; // we're in CTC (CTF) mode now
         return;
     }
 
@@ -929,7 +1145,7 @@ void P_SpawnMapThing (mapthing_t* mthing)
 
     // check for players specially
     // haleyjd 20120209: [STRIFE] 8 player starts
-    if (mthing->type <= 8)
+    if(mthing->type <= 8)
     {
         // save spots for respawning in network games
         playerstarts[mthing->type-1] = *mthing;
@@ -940,43 +1156,46 @@ void P_SpawnMapThing (mapthing_t* mthing)
     }
 
     // check for apropriate skill level
-    if (!netgame && (mthing->options & 16) )
+    if(!netgame && (mthing->options & 16) )
         return;
 
-    if (gameskill == sk_baby)
+    if(gameskill == sk_baby)
         bit = 1;
-    else if (gameskill == sk_nightmare)
+    else if(gameskill == sk_nightmare)
         bit = 4;
     else
         bit = 1<<(gameskill-1);
 
-    if (!(mthing->options & bit) )
+    if(!(mthing->options & bit) )
         return;
 
     // find which type to spawn
-    for (i=0 ; i< NUMMOBJTYPES ; i++)
-        if (mthing->type == mobjinfo[i].doomednum)
+    for(i = 0; i < NUMMOBJTYPES; i++)
+        if(mthing->type == mobjinfo[i].doomednum)
             break;
 
-    if (i==NUMMOBJTYPES)
-        I_Error ("P_SpawnMapThing: Unknown type %i at (%i, %i)",
-                 mthing->type,
-                 mthing->x, mthing->y);
+    // haleyjd 20140816: [SVE] stability
+    if(i == NUMMOBJTYPES)
+        return;
 
     // don't spawn keycards and players in deathmatch
-    if (deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)
+    if(deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)
         return;
 
-    // don't spawn any monsters if -nomonsters
-    // villsa [STRIFE] Removed MT_SKULL
-    if (nomonsters && (mobjinfo[i].flags & MF_COUNTKILL))
-        return;
+    // [SVE] svillarreal - always spawn if MF2_IGNORENOMONSTERS is set
+    if(!(mobjinfo[i].flags2 & MF2_IGNORENOMONSTERS))
+    {
+        // don't spawn any monsters if -nomonsters
+        // villsa [STRIFE] Removed MT_SKULL
+        if(nomonsters && (mobjinfo[i].flags & MF_COUNTKILL))
+            return;
+    }
     
     // spawn it
     x = mthing->x << FRACBITS;
     y = mthing->y << FRACBITS;
 
-    if (mobjinfo[i].flags & MF_SPAWNCEILING)
+    if(mobjinfo[i].flags & MF_SPAWNCEILING)
         z = ONCEILINGZ;
     else
         z = ONFLOORZ;
@@ -1006,6 +1225,9 @@ void P_SpawnMapThing (mapthing_t* mthing)
         mobj->flags |= MF_SHADOW;
     if (mthing->options & MTF_MVIS)        // [STRIFE] Alt. Translucency
         mobj->flags |= MF_MVIS;
+
+    // haleyjd 20140902: [SVE] interpolation
+    P_MobjBackupPosition(mobj);
 }
 
 
@@ -1021,14 +1243,11 @@ void P_SpawnMapThing (mapthing_t* mthing)
 // [STRIFE] Modifications for:
 // * No spawn tics randomization
 // * Player melee behavior
+// [SVE] svillarreal - now returns mobj
 //
 extern fixed_t attackrange;
 
-void
-P_SpawnPuff
-( fixed_t	x,
-  fixed_t	y,
-  fixed_t	z )
+mobj_t *P_SpawnPuff(fixed_t x, fixed_t y, fixed_t z)
 {
     mobj_t*	th;
     int t;
@@ -1050,6 +1269,8 @@ P_SpawnPuff
     if (th->tics < 1)
         th->tics = 1;
     */
+    
+    return th;
 }
 
 //
@@ -1094,6 +1315,23 @@ P_SpawnBlood
         P_SetMobjState(th, S_BLOD_01);
     else if(damage < 7)
         P_SetMobjState(th, S_BLOD_02);
+
+    // [SVE] svillarreal - more blood and gore!
+    if(!classicmode && d_maxgore)
+    {
+        mobj_t *th2 = P_SpawnMobj(x, y, z, MT_BLOOD_GORE);
+        int t;
+        
+        th2->z = th->z;
+
+        t = P_Random();
+        th2->momx = (t - P_Random ()) << 10;
+        t = P_Random();
+        th2->momy = (t - P_Random ()) << 10;
+        th2->momz = P_Random() << 10;
+
+        P_SetMobjState(th2, S_BLOD_00 + (P_Random() % 2));
+    }
 }
 
 
@@ -1165,7 +1403,7 @@ P_SpawnMissile
     if (th->info->seesound)
         S_StartSound (th, th->info->seesound);
 
-    th->target = source;	// where it came from
+    P_SetTarget(&th->target, source);	// where it came from
     an = R_PointToAngle2 (source->x, source->y, dest->x, dest->y);
 
     // fuzzy player
@@ -1215,7 +1453,7 @@ mobj_t* P_SpawnFacingMissile(mobj_t* source, mobj_t* target, mobjtype_t type)
     if(th->info->seesound)
         S_StartSound(th, th->info->seesound);
 
-    th->target = source;    // where it came from
+    P_SetTarget(&th->target, source);    // where it came from
     th->angle = source->angle; // haleyjd 09/06/10: fix0red
     an = th->angle;
 
@@ -1260,39 +1498,52 @@ mobj_t* P_SpawnPlayerMissile(mobj_t* source, mobjtype_t type)
 {
     mobj_t*	th;
     angle_t	an;
-    
+    fixed_t aim;
     fixed_t	x;
     fixed_t	y;
     fixed_t	z;
     fixed_t	slope;
+
+    an = source->angle;
     
     // see which target is to be aimed at
-    an = source->angle;
-    slope = P_AimLineAttack (source, an, 16*64*FRACUNIT);
-    
-    if (!linetarget)
+    if(netgame || autoaim) // [SVE]: single player autoaim toggle
     {
-        an += 1<<26;
         slope = P_AimLineAttack (source, an, 16*64*FRACUNIT);
 
-        if (!linetarget)
+        if(!linetarget)
         {
-            an -= 2<<26;
+            an += 1<<26;
             slope = P_AimLineAttack (source, an, 16*64*FRACUNIT);
+
+            if(!linetarget)
+            {
+                an -= 2<<26;
+                slope = P_AimLineAttack (source, an, 16*64*FRACUNIT);
+            }
+
+            if(!linetarget)
+            {
+                an = source->angle;
+
+                // haleyjd 09/21/10: [STRIFE] Removed, for look up/down support.
+                //slope = 0; 
+            }
         }
 
-        if (!linetarget)
-        {
-            an = source->angle;
-
-            // haleyjd 09/21/10: [STRIFE] Removed, for look up/down support.
-            //slope = 0; 
-        }
+        // villsa [STRIFE]
+        if(linetarget)
+            P_SetTarget(&source->target, linetarget);
+    }
+    else
+    {
+        P_AimLineAttack(source, an, 16*64*FRACUNIT);
+        // villsa [STRIFE]
+        if(linetarget)
+            P_SetTarget(&source->target, linetarget);
+        linetarget = NULL;
     }
 
-    // villsa [STRIFE]
-    if(linetarget)
-        source->target = linetarget;
 
     x = source->x;
     y = source->y;
@@ -1303,20 +1554,35 @@ mobj_t* P_SpawnPlayerMissile(mobj_t* source, mobjtype_t type)
     else
         z = source->z + 22*FRACUNIT;
 
-    th = P_SpawnMobj (x,y,z, type);
+    th = P_SpawnMobj(x, y, z, type);
 
-    if (th->info->seesound)
+    if(th->info->seesound)
         S_StartSound (th, th->info->seesound);
 
-    th->target = source;
-    th->angle = an;
-    th->momx = FixedMul( th->info->speed,
-                         finecosine[an>>ANGLETOFINESHIFT]);
-    th->momy = FixedMul( th->info->speed,
-                         finesine[an>>ANGLETOFINESHIFT]);
-    th->momz = FixedMul( th->info->speed, slope);
+    // [SVE] svillarreal - handle absolute pitch aiming
+    if(!linetarget)
+    {
+        fixed_t pitch = (source->player->pitch / 256);
 
-    P_CheckMissileSpawn (th);
+        slope = pitch;
+
+        if(pitch < 0)
+            pitch = pitch + FRACUNIT;
+        else
+            pitch = FRACUNIT - pitch;
+
+        aim = FixedMul(th->info->speed, pitch);
+    }
+    else
+        aim = th->info->speed;
+
+    P_SetTarget(&th->target, source);
+    th->angle = an;
+    th->momx = FixedMul(aim, finecosine[an>>ANGLETOFINESHIFT]);
+    th->momy = FixedMul(aim, finesine[an>>ANGLETOFINESHIFT]);
+    th->momz = FixedMul(th->info->speed, slope);
+
+    P_CheckMissileSpawn(th);
 
     return th;
 }
@@ -1327,7 +1593,7 @@ mobj_t* P_SpawnPlayerMissile(mobj_t* source, mobjtype_t type)
 // villsa [STRIFE] new function
 // Spawn a high-arcing ballistic projectile
 //
-mobj_t* P_SpawnMortar(mobj_t *source, mobjtype_t type)
+mobj_t* P_SpawnMortar(mobj_t *source, mobj_t *target, mobjtype_t type)
 {
     mobj_t* th;
     angle_t an;
@@ -1336,7 +1602,7 @@ mobj_t* P_SpawnMortar(mobj_t *source, mobjtype_t type)
     an = source->angle;
 
     th = P_SpawnMobj(source->x, source->y, source->z, type);
-    th->target = source;
+    P_SetTarget(&th->target, target); // [SVE]: use target
     th->angle = an;
     an >>= ANGLETOFINESHIFT;
 

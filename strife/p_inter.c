@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -23,6 +24,7 @@
 #include "deh_main.h"
 #include "deh_misc.h"
 #include "doomstat.h"
+#include "g_game.h"
 #include "m_misc.h"
 #include "m_random.h"
 #include "i_system.h"
@@ -32,6 +34,7 @@
 #include "s_sound.h"
 #include "p_inter.h"
 
+#include "st_stuff.h"   // [SVE] svillarreal
 #include "hu_stuff.h"   // villsa [STRIFE]
 #include "z_zone.h"     // villsa [STRIFE]
 
@@ -41,6 +44,13 @@
 #include "p_dialog.h"
 #include "f_finale.h"
 
+// [SVE] svillarreal
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#include "net_client.h"
+#endif
+
+#include "hu_lib.h"
 
 #define BONUSADD    6
 
@@ -50,6 +60,10 @@
 // villsa [STRIFE] updated arrays
 int maxammo[NUMAMMO]    = { 250, 50, 25, 400, 100, 30, 16 };
 int clipammo[NUMAMMO]   = { 10, 4, 2, 20, 4, 6, 4 };
+
+// [SVE] svillarreal
+mobj_t *curignitemobj = NULL;
+int numignitechains = 0;
 
 
 //
@@ -72,7 +86,7 @@ boolean P_GiveAmmo(player_t* player, ammotype_t ammo, int num)
         return false;
 
     if(ammo > NUMAMMO)
-        I_Error ("P_GiveAmmo: bad type %i", ammo);
+        return false; // haleyjd 20140816: [SVE] stability
 
     if(player->ammo[ammo] == player->maxammo[ammo])
         return false;
@@ -234,13 +248,12 @@ boolean P_GiveBody(player_t* player, int num)
 {
     int maxhealth;
     int healing;
+    mobj_t *mo; // haleyjd 20110225: needed below...
 
     maxhealth = MAXHEALTH + player->stamina;
 
     if(num >= 0) // haleyjd 20100923: fixed to give proper amount of health
     {
-        mobj_t *mo; // haleyjd 20110225: needed below...
-
         // any healing to do?
         if(player->health >= maxhealth)
             return false;
@@ -281,6 +294,13 @@ boolean P_GiveBody(player_t* player, int num)
 
         // Set health. BUG: Oddly, mo->health is NOT set here...
         player->health = healing;
+
+        // haleyjd 20140817: [SVE] fix above problem.
+        if(!classicmode)
+        {
+            mo = P_SubstNullMobj(player->mo);
+            mo->health = player->health;
+        }
     }
 
     return true;
@@ -422,9 +442,241 @@ boolean P_GivePower(player_t* player, powertype_t power)
     return true;
 }
 
+static char ctcbuffer[80];
+
+//
+// P_MessageAllPlayers
+//
+// haleyjd 20140920: [SVE] message all players
+//
+void P_MessageAllPlayers(char *message, int sfx_id)
+{
+    int i;
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        if(playeringame[i])
+            players[i].message = message;
+    }
+    S_StartSound(NULL, sfx_id);
+}
+
+//
+// P_returnChaliceToBase
+//
+// haleyjd 20140920: [SVE] Part of Capture the Chalice logic - if a player 
+// touches their own team's chalice, return it to the respective base.
+//
+static void P_returnChaliceToBase(mobj_t *special, mobj_t *toucher)
+{
+    thinker_t *th;
+    mobjtype_t type = NUMMOBJTYPES;
+
+    if(special->type == MT_INV_CHALICE)
+        type = MT_CTC_FLAGSPOT_RED;
+    else if(special->type == MT_INV_BLUE_CHALICE)
+        type = MT_CTC_FLAGSPOT_BLUE;
+    else
+        return; // eh??
+
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t *)th;
+
+            if(mo->type == type &&
+               P_AproxDistance(mo->x - special->x, mo->y - special->y) > 64*FRACUNIT)
+            {
+                mobj_t *fog;
+                fixed_t oldx = mo->x;
+                fixed_t oldy = mo->y;
+                fixed_t oldz = mo->z;
+                fixed_t x = mo->x + 16 * finecosine[mo->angle >> ANGLETOFINESHIFT];
+                fixed_t y = mo->y + 16 * finesine[mo->angle >> ANGLETOFINESHIFT];
+
+                if(P_TeleportMove(special, x, y))
+                {
+                    fog = P_SpawnMobj(oldx, oldy, oldz, MT_TFOG);
+                    S_StartSound(fog, sfx_telept);
+                    fog = P_SpawnMobj(special->x, special->y, special->z, MT_TFOG);
+                    S_StartSound(fog, sfx_telept);
+                    M_snprintf(ctcbuffer, sizeof(ctcbuffer), "%s team chalice recovered!",
+                        type == MT_CTC_FLAGSPOT_BLUE ? "Blue" : "Red");
+                    P_MessageAllPlayers(ctcbuffer, sfx_yeah);
+                }
+                return;
+            }
+        }
+    }
+}
+
+//
+// P_stealChalice
+//
+// haleyjd 20140920: [SVE] Steal the chalice of the other team for CTC.
+//
+// "So, YOU'RE the fool who stole the chalice!"
+//
+static void P_stealChalice(mobj_t *special, mobj_t *toucher)
+{
+    if(P_GiveInventoryItem(toucher->player, special->sprite, special->type))
+    {
+        M_snprintf(ctcbuffer, sizeof(ctcbuffer), "%s team chalice stolen!",
+            special->type == MT_INV_BLUE_CHALICE ? "Blue" : "Red");
+        P_MessageAllPlayers(ctcbuffer, sfx_alarm);
+        P_RemoveMobj(special);
+        toucher->player->bonuscount += BONUSADD;
+    }
+}
+
+//
+// P_checkForCTCScore
+//
+// haleyjd 20140920: [SVE] Player is touching a Capture the Chalice flag base;
+// see if a score should be given to the player's team.
+//
+static void P_checkForCTCScore(mobj_t *special, mobj_t *toucher)
+{
+    int i, score;
+    thinker_t *th;
+    mobj_t *myflag = NULL, *mybase = NULL;
+    int myteam = toucher->player->allegiance;
+    mobjtype_t mybasetype, myflagtype, otherflagtype;
+
+    switch(myteam)
+    {
+    case CTC_TEAM_BLUE:
+        mybasetype    = MT_CTC_FLAGSPOT_BLUE;
+        myflagtype    = MT_INV_BLUE_CHALICE;
+        otherflagtype = MT_INV_CHALICE;
+        break;
+    case CTC_TEAM_RED:
+        mybasetype    = MT_CTC_FLAGSPOT_RED;
+        myflagtype    = MT_INV_CHALICE;
+        otherflagtype = MT_INV_BLUE_CHALICE;
+        break;
+    default:
+        return; // borked.
+    }
+
+    // not touching your own base?
+    if(special->type != mybasetype)
+        return;
+
+    // must possess other team's chalice in inventory
+    for(i = 0; i < NUMINVENTORY; i++)
+    {
+        inventory_t *inv = &(toucher->player->inventory[i]);
+
+        if(inv->type == otherflagtype && inv->amount >= 1)
+            break;
+    }
+    if(i == NUMINVENTORY)
+        return;
+
+    // make sure own team's chalice is secure; it must be within 64 units 
+    // of the team's flag base.
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t *)th;
+            if(mo->type == mybasetype)
+                mybase = mo;
+            else if(mo->type == myflagtype)
+                myflag = mo;
+
+            if(mybase && myflag)
+                break;
+        }
+    }
+
+    // If the base is missing, we are screwed. If the flag is missing, somebody
+    // on the other team is probably toting it.
+    if(!(mybase && myflag))
+        return;
+
+    // check if flag is too far from base
+    if(P_AproxDistance(myflag->x - mybase->x, myflag->y - mybase->y) > 64*FRACUNIT)
+        return;
+
+    // award point
+    switch(myteam)
+    {
+    case CTC_TEAM_BLUE:
+        score = ++ctcbluescore;
+        break;
+    case CTC_TEAM_RED:
+        score = ++ctcredscore;
+        break;
+    default:
+        score = 0;
+        break;
+    }
+
+    // own flag is at base, and touching own base with other team's flag; SCORE!
+    M_snprintf(ctcbuffer, sizeof(ctcbuffer), "%s team scores! (%d/%d)",
+               myteam == CTC_TEAM_BLUE ? "Blue" : "Red", score, ctcpointlimit);
+    P_MessageAllPlayers(ctcbuffer, sfx_yeah);
+
+    // take away other team's chalice from inventory; this will force the flag base
+    // to respawn it.
+    P_RemoveInventoryItem(toucher->player, i, 1);
+
+    // check for score limit
+    if(score >= ctcpointlimit)
+        G_ExitLevel(0);
+}
 
 // villsa [STRIFE]
 static char pickupmsg[80];
+
+//
+// P_CheckTalismans
+//
+// haleyjd [SVE]: For super secret level.
+//
+static void P_CheckTalismans(player_t *player, mobjtype_t type)
+{
+    const char *extra = "";
+
+    // award talisman power
+    if(!(player->cheats & CF_TALISMANPOWER))
+    {
+        if(P_PlayerHasItem(player, MT_AZTECARTI_RED) &&
+           P_PlayerHasItem(player, MT_AZTECARTI_GREEN) &&
+           P_PlayerHasItem(player, MT_AZTECARTI_BLUE))
+        {
+            player->cheats |= CF_TALISMANPOWER;
+            S_StartSound(NULL, sfx_yeah);
+            extra = " You have super strength!";
+
+            // [SVE] svillarreal
+#ifdef _USE_STEAM_
+            if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+                I_SteamSetAchievement("SVE_ACH_BESERK_REBORN");
+#endif
+        }
+    }
+    // Doom 64 tribute :)
+    switch(type)
+    {
+    case MT_AZTECARTI_RED:
+        M_snprintf(pickupmsg, sizeof(pickupmsg), 
+                   "You have a feeling that it wasn't to be touched...%s", extra);
+        break;
+    case MT_AZTECARTI_GREEN:
+        M_snprintf(pickupmsg, sizeof(pickupmsg), 
+                   "Whatever it is, it doesn't belong in this world...%s", extra);
+        break;
+    case MT_AZTECARTI_BLUE:
+        M_snprintf(pickupmsg, sizeof(pickupmsg),
+                   "It must do something...%s", extra);
+        break;
+    default:
+        break;
+    }
+}
 
 //
 // P_TouchSpecialThing
@@ -680,6 +932,53 @@ void P_TouchSpecialThing(mobj_t* special, mobj_t* toucher)
             pickupmsg[0] = '!';
         break;
 
+    case SPR_FLGR: // [SVE] red flag spot / red talisman
+    case SPR_FLGB: // [SVE] blue flag spot / blue talisman
+        if(capturethechalice)
+        {
+            P_checkForCTCScore(special, toucher);
+            return;
+        }
+        else
+        {
+            if(P_GiveInventoryItem(player, special->sprite, special->type))
+                P_CheckTalismans(player, special->type);
+            else
+                pickupmsg[0] = '!';
+        }
+        break;
+
+    case SPR_FLGG: // [SVE] green talisman
+        if(P_GiveInventoryItem(player, special->sprite, special->type))
+            P_CheckTalismans(player, special->type);
+        else
+            pickupmsg[0] = '!';
+        break;
+
+    case SPR_RELC: // [SVE] red chalice
+    case SPR_RELB: // [SVE] blue chalice
+        if(capturethechalice)
+        {
+            if((special->sprite == SPR_RELC && player->allegiance == CTC_TEAM_RED) ||
+               (special->sprite == SPR_RELB && player->allegiance == CTC_TEAM_BLUE))
+            {
+                // player is touching their own team's flag; if it is out of range, 
+                // warp it back to base
+                P_returnChaliceToBase(special, toucher);
+                return;
+            }
+            else if((special->sprite == SPR_RELC && player->allegiance == CTC_TEAM_BLUE) ||
+                    (special->sprite == SPR_RELB && player->allegiance == CTC_TEAM_RED))
+            {
+                // player is touching the OTHER team's chalice; steal it!
+                P_stealChalice(special, toucher);
+                return;
+            }
+            else
+                return; // dunno, but you can't do anything to it.
+        }
+        // fall through to default case if not in Capture the Chalice mode
+
     // villsa [STRIFE] check default items
     case SPR_TOKN:
     default:
@@ -778,17 +1077,22 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
 
         if(target->player)
         {
+            // [SVE]: use pretty player names
+            char *srcName = HUlib_makePrettyPlayerName(source->player - players);
+            char *dstName = HUlib_makePrettyPlayerName(target->player - players);
             source->player->frags[target->player-players]++;
 
             // villsa [STRIFE] new messages when fragging players
-            // haleyjd 20141024: corrected; uses player->allegiance, not mo->miscdata
             DEH_snprintf(plrkilledmsg, sizeof(plrkilledmsg),
                          "%s killed %s",
-                         player_names[source->player->allegiance],
-                         player_names[target->player->allegiance]);
+                         srcName,  // fixed/changed for [SVE]
+                         dstName);
 
             if(netgame)
                 players[consoleplayer].message = plrkilledmsg;
+
+            Z_Free(srcName);
+            Z_Free(dstName);
         }
     }
     else if(!netgame && (target->flags & MF_COUNTKILL))
@@ -862,7 +1166,6 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
             // switch view prior to dying
             AM_Stop ();
         }
-
     }
 
     // villsa [STRIFE] some modifications to setting states
@@ -872,13 +1175,40 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
             P_SetMobjState(target, S_DISR_00);  // 373
         else
         {
-            if(target->health < -target->info->spawnhealth 
+            int minhealth = target->info->spawnhealth;
+
+            // [SVE] svillarreal - increase chance of gibbing
+            if(d_maxgore)
+                minhealth >>= 1;
+
+            if(target->health < -minhealth
                 && target->info->xdeathstate)
                 P_SetMobjState(target, target->info->xdeathstate);
             else
                 P_SetMobjState(target, target->info->deathstate);
         }
     }
+
+    // [SVE] svillarreal - achievements from killing bosses
+#ifdef _USE_STEAM_
+    if(!P_CheckPlayersCheating(ACH_ALLOW_ANY))
+    {
+        if(gamemap == 9 && target->type == MT_PROGRAMMER)
+            I_SteamSetAchievement("SVE_ACH_CODE_MONKEY");
+
+        if(gamemap == 16 && target->type == MT_SPECTRE_B)
+            I_SteamSetAchievement("SVE_ACH_BISHSLAPPED");
+
+        if(gamemap == 12 && target->type == MT_SPECTRE_C)
+            I_SteamSetAchievement("SVE_ACH_ORACLE");
+
+        if(gamemap == 10 && target->type == MT_SPECTRE_D)
+            I_SteamSetAchievement("SVE_ACH_MACIL");
+
+        if(gamemap == 27 && target->type == MT_SPECTRE_E)
+            I_SteamSetAchievement("SVE_ACH_LOREMASTER");
+    }
+#endif
 
     // villsa [STRIFE] no death tics randomization
 
@@ -940,7 +1270,7 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
 
         case MT_COUPLING:
             junk.tag = 225;
-            EV_DoDoor(&junk, vld_close);
+            EV_DoDoor(&junk, dr_close);
 
             junk.tag = 44;
             EV_DoFloor(&junk, lowerFloor);
@@ -961,7 +1291,7 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
     {
     case MT_TOKEN_SHOPCLOSE:
         junk.tag = 222;
-        EV_DoDoor(&junk, vld_close);
+        EV_DoDoor(&junk, dr_close);
         P_NoiseAlert(players[0].mo, players[0].mo);
 
         M_snprintf(plrkilledmsg, sizeof(plrkilledmsg),
@@ -973,12 +1303,12 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
 
     case MT_TOKEN_PRISON_PASS:
         junk.tag = 223;
-        EV_DoDoor(&junk, vld_open);
+        EV_DoDoor(&junk, dr_open);
         return;
 
     case MT_TOKEN_DOOR3:
         junk.tag = 224;
-        EV_DoDoor(&junk, vld_open);
+        EV_DoDoor(&junk, dr_open);
         return;
 
     case MT_SIGIL_A:
@@ -1025,6 +1355,15 @@ void P_KillMobj(mobj_t* source, mobj_t* target)
         r = P_Random();
         mo->momy += ((r & 7) - (P_Random() & 7)) << FRACBITS;
         mo->flags |= (MF_SPECIAL|MF_DROPPED);   // special versions of items
+    }
+
+    // [SVE] svillarreal
+    if((target->type >= MT_GUARD1 && target->type <= MT_SHADOWGUARD) &&
+        curignitemobj == target)
+    {
+        // reset the chain if 'fully' dead
+        P_SetTarget(&curignitemobj, NULL);
+        numignitechains = 0;
     }
 }
 
@@ -1078,7 +1417,28 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
     if(target->health <= 0)
         return;
 
+    // haleyjd 20140827: [SVE] don't allow damaging or killing objects that hold
+    // progress-blocking items that the player doesn't have yet and the things 
+    // don't drop when killed.
+    if(!classicmode && P_CheckForBlockingItems(target))
+    {
+        target->flags &= ~MF_NODIALOG;
+        target->flags |= (target->info->flags & MF_NODIALOG);
+        return;
+    }
+
     player = target->player;
+
+    // haleyjd 20140918: [SVE] no team damage in Capture the Chalice mode
+    if(capturethechalice && player && damage < 10000)
+    {
+        if(source && source->player && player != source->player &&
+           player->allegiance == source->player->allegiance)
+            return;
+        if(inflictor && inflictor->player && player != inflictor->player &&
+           player->allegiance == inflictor->player->allegiance)
+            return;
+    }
 
     // villsa [STRIFE] unused - skullfly check (removed)
 
@@ -1184,7 +1544,7 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
         || target->type == MT_RLEADER)
     {
         if(source)
-            target->target = source;
+            P_SetTarget(&target->target, source);
 
         P_SetMobjState(target, target->info->painstate);
         return;
@@ -1245,6 +1605,11 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
             damage = target->health - 1;
         }
 
+        // [SVE] svillarreal
+        if(d_dmgindictor && player == &players[consoleplayer])
+        {
+            ST_AddDamageMarker(source);
+        }
 
         // Below certain threshold,
         // ignore damage in GOD mode.
@@ -1294,7 +1659,7 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
 
         // haleyjd 20110203 [STRIFE]: target->target set here
         if(target != source)
-            target->target = source;
+            P_SetTarget(&target->target, source);
 
         if(player->damagecount > 100)
             player->damagecount = 100;  // teleport stomp does 10k points...
@@ -1355,6 +1720,43 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
                 P_SetPsprite(target->player, ps_flash, S_NULL);
             }
 
+            // [SVE] svillarreal - Spontaneous Combustion achievement
+            if((target->type >= MT_GUARD1 && target->type <= MT_SHADOWGUARD) &&
+                inflictor->type == MT_SFIREBALL)
+            {
+                if(curignitemobj == NULL && inflictor->target &&
+                    inflictor->target->player)
+                {
+                    P_SetTarget(&curignitemobj, target);
+                    numignitechains = 0;
+                }
+                else if(inflictor == curignitemobj || !(inflictor->flags & MF_MISSILE))
+                {
+                    P_SetTarget(&curignitemobj, target);
+                    numignitechains++;
+
+                    if(numignitechains == 3)
+                    {
+#ifdef _USE_STEAM_
+                        if(!I_SteamHasAchievement("SVE_ACH_FLAME_CHAIN") &&
+                            !P_CheckPlayersCheating(ACH_ALLOW_SP))
+                        {
+                            if(players[consoleplayer].powers[pw_communicator] == true)
+                                I_StartVoice(DEH_String("VOC219"));
+
+                            I_SteamSetAchievement("SVE_ACH_FLAME_CHAIN");
+                        }
+                        else
+#endif
+                        if(players[consoleplayer].powers[pw_communicator] == true &&
+                            !(M_Random() & 3) && !classicmode)
+                        {
+                            I_StartVoice(DEH_String("VOC219"));
+                        }
+                    }
+                }
+            }
+
             P_SetMobjState(target, S_BURN_00);  // 349
             S_StartSound(target, sfx_burnme);
 
@@ -1393,7 +1795,7 @@ void P_DamageMobj(mobj_t* target, mobj_t* inflictor, mobj_t* source, int damage)
     {
         // if not intent on another player,
         // chase after this one
-        target->target = source;
+        P_SetTarget(&target->target, source);
         target->threshold = BASETHRESHOLD;
 
         if(target->state == &states[target->info->spawnstate]

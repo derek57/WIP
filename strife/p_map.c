@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard, Andrey Budko
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -13,8 +14,8 @@
 // GNU General Public License for more details.
 //
 // DESCRIPTION:
-//	Movement, collision handling.
-//	Shooting and aiming.
+//  Movement, collision handling.
+//  Shooting and aiming.
 //
 
 #include <stdio.h>
@@ -96,11 +97,11 @@ line_t     *blockingline;
 // We keep the original limit, to detect what variables in memory were 
 // overwritten (see SpechitOverrun())
 
-#define MAXSPECIALCROSS 		20
-#define MAXSPECIALCROSS_ORIGINAL	8
+#define MAXSPECIALCROSS         20
+#define MAXSPECIALCROSS_ORIGINAL    8
 
-line_t*		spechit[MAXSPECIALCROSS];
-int		numspechit;
+line_t*     spechit[MAXSPECIALCROSS];
+int     numspechit;
 
 
 
@@ -209,7 +210,20 @@ boolean P_TeleportMove(mobj_t*  thing, fixed_t  x, fixed_t  y)
     thing->y = y;
     thing->z = tmfloorz; // haleyjd 09/15/10: [STRIFE] Rogue added a z-set here
 
-    P_SetThingPosition (thing);
+    P_MobjBackupPosition(thing); // [SVE] interpolation
+    P_SetThingPosition(thing);
+
+    // haleyjd 20140923: [SVE] vanilla bug fix: footclipping state not updated when
+    // an object teleports. For *most* things this doesn't normally matter since they
+    // end up moving almost immediately, and update their own flag at that time. Not
+    // the case for the chalices in CTC mode, though!
+    if(!classicmode)
+    {
+        if(P_GetTerrainType(thing) != FLOOR_SOLID)
+            thing->flags |= MF_FEETCLIPPED;
+        else
+            thing->flags &= ~MF_FEETCLIPPED;
+    }
 
     return true;
 }
@@ -267,8 +281,15 @@ boolean PIT_CheckLine (line_t* ld)
             return false;   // block floaters only
     }
 
+    // [SVE] svillarreal - check for valid sector heights
+    if(ld->frontsector->ceilingheight == ld->frontsector->floorheight ||
+        ld->backsector->ceilingheight == ld->backsector->floorheight)
+    {
+        return false;
+    }
+
     // set openrange, opentop, openbottom
-    P_LineOpening (ld);	
+    P_LineOpening (ld); 
 
     // adjust floor / ceiling heights
     if (opentop < tmceilingz)
@@ -278,7 +299,7 @@ boolean PIT_CheckLine (line_t* ld)
     }
 
     if (openbottom > tmfloorz)
-        tmfloorz = openbottom;	
+        tmfloorz = openbottom;  
 
     if (lowfloor < tmdropoffz)
         tmdropoffz = lowfloor;
@@ -302,7 +323,7 @@ boolean PIT_CheckLine (line_t* ld)
 //
 // PIT_CheckThing
 //
-boolean PIT_CheckThing (mobj_t* thing)
+boolean PIT_CheckThing(mobj_t* thing)
 {
     fixed_t             blockdist;
     boolean             solid;
@@ -321,7 +342,7 @@ boolean PIT_CheckThing (mobj_t* thing)
         || abs(thing->y - tmy) >= blockdist )
     {
         // didn't hit it
-        return true;	
+        return true;    
     }
 
     // villsa [STRIFE] see if it went over / under
@@ -329,7 +350,7 @@ boolean PIT_CheckThing (mobj_t* thing)
         return true;    // overhead
 
     // villsa [STRIFE] see if it went over / under
-    if (tmthing->z + tmthing->height < thing->z)
+    if(tmthing->z + tmthing->height < thing->z)
         return true;    // underneath
 
     // villsa [STRIFE] unused
@@ -380,7 +401,7 @@ boolean PIT_CheckThing (mobj_t* thing)
         // don't traverse any more
         return false;
     }
-    
+
     // check for special pickup
     if (thing->flags & MF_SPECIAL)
     {
@@ -477,15 +498,20 @@ P_CheckPosition
     // because mobj_ts are grouped into mapblocks
     // based on their origin point, and can overlap
     // into adjacent blocks by up to MAXRADIUS units.
-    xl = (tmbbox[BOXLEFT] - bmaporgx - MAXRADIUS)>>MAPBLOCKSHIFT;
-    xh = (tmbbox[BOXRIGHT] - bmaporgx + MAXRADIUS)>>MAPBLOCKSHIFT;
-    yl = (tmbbox[BOXBOTTOM] - bmaporgy - MAXRADIUS)>>MAPBLOCKSHIFT;
-    yh = (tmbbox[BOXTOP] - bmaporgy + MAXRADIUS)>>MAPBLOCKSHIFT;
 
-    for (bx=xl ; bx<=xh ; bx++)
-        for (by=yl ; by<=yh ; by++)
-            if (!P_BlockThingsIterator(bx,by,PIT_CheckThing))
-                return false;
+    // [SVE] svillarreal
+    if(!(thing->info->flags2 & MF2_NOTHINGBLOCK))
+    {
+        xl = (tmbbox[BOXLEFT] - bmaporgx - MAXRADIUS)>>MAPBLOCKSHIFT;
+        xh = (tmbbox[BOXRIGHT] - bmaporgx + MAXRADIUS)>>MAPBLOCKSHIFT;
+        yl = (tmbbox[BOXBOTTOM] - bmaporgy - MAXRADIUS)>>MAPBLOCKSHIFT;
+        yh = (tmbbox[BOXTOP] - bmaporgy + MAXRADIUS)>>MAPBLOCKSHIFT;
+
+        for (bx=xl ; bx<=xh ; bx++)
+            for (by=yl ; by<=yh ; by++)
+                if (!P_BlockThingsIterator(bx,by,PIT_CheckThing))
+                    return false;
+    }
     
     // check lines
     xl = (tmbbox[BOXLEFT] - bmaporgx)>>MAPBLOCKSHIFT;
@@ -509,9 +535,9 @@ P_CheckPosition
 //
 boolean
 P_TryMove
-( mobj_t*	thing,
-  fixed_t	x,
-  fixed_t	y )
+( mobj_t*   thing,
+  fixed_t   x,
+  fixed_t   y )
 {
     fixed_t oldx;
     fixed_t oldy;
@@ -707,16 +733,16 @@ boolean P_ThingHeightClip (mobj_t* thing)
 // SLIDE MOVE
 // Allows the player to slide along any angled walls.
 //
-fixed_t		bestslidefrac;
-fixed_t		secondslidefrac;
+fixed_t     bestslidefrac;
+fixed_t     secondslidefrac;
 
-line_t*		bestslideline;
-line_t*		secondslideline;
+line_t*     bestslideline;
+line_t*     secondslideline;
 
-mobj_t*		slidemo;
+mobj_t*     slidemo;
 
-fixed_t		tmxmove;
-fixed_t		tmymove;
+fixed_t     tmxmove;
+fixed_t     tmymove;
 
 
 
@@ -771,8 +797,8 @@ void P_HitSlideLine (line_t* ld)
     movelen = P_AproxDistance (tmxmove, tmymove);
     newlen = FixedMul (movelen, finecosine[deltaangle]);
 
-    tmxmove = FixedMul (newlen, finecosine[lineangle]);	
-    tmymove = FixedMul (newlen, finesine[lineangle]);	
+    tmxmove = FixedMul (newlen, finecosine[lineangle]); 
+    tmymove = FixedMul (newlen, finesine[lineangle]);   
 }
 
 
@@ -941,21 +967,26 @@ stairstep:
 //
 // P_LineAttack
 //
-mobj_t*		linetarget;	// who got hit (or NULL)
-mobj_t*		shootthing;
+mobj_t*     linetarget; // who got hit (or NULL)
+mobj_t*     shootthing;
+
+// [SVE] svillarreal
+fixed_t         shootdirx;
+fixed_t         shootdiry;
+fixed_t         shootdirz;
 
 // Height if not aiming up or down
 // ???: use slope for monsters?
-fixed_t		shootz;	
+fixed_t     shootz; 
 
-int		la_damage;
-fixed_t		attackrange;
+int     la_damage;
+fixed_t     attackrange;
 
-fixed_t		aimslope;
+fixed_t     aimslope;
 
 // slopes to top and bottom of target
-extern fixed_t	topslope;
-extern fixed_t	bottomslope;	
+extern fixed_t  topslope;
+extern fixed_t  bottomslope;    
 
 
 //
@@ -1077,6 +1108,13 @@ boolean PTR_ShootTraverse (intercept_t* in)
     fixed_t             thingtopslope;
     fixed_t             thingbottomslope;
 
+    // [SVE] svillarreal - new vars
+    boolean             hitplane = false;
+    sector_t            *sidesector = NULL;
+    fixed_t             hitx;
+    fixed_t             hity;
+    fixed_t             hitz;
+
     if (in->isaline)
     {
         li = in->d.line;
@@ -1084,13 +1122,13 @@ boolean PTR_ShootTraverse (intercept_t* in)
         if (li->special)
             P_ShootSpecialLine (shootthing, li);
 
+        dist = FixedMul(attackrange, in->frac);
+
         if ( !(li->flags & ML_TWOSIDED) )
             goto hitline;
 
         // crosses a two sided line
         P_LineOpening (li);
-
-        dist = FixedMul (attackrange, in->frac);
 
         // Check if backsector is NULL.  See comment in PTR_AimTraverse.
 
@@ -1119,35 +1157,146 @@ boolean PTR_ShootTraverse (intercept_t* in)
 
         // hit line
 hitline:
-        // position a bit closer
-        frac = in->frac - FixedDiv (4*FRACUNIT,attackrange);
-        x = trace.x + FixedMul (trace.dx, frac);
-        y = trace.y + FixedMul (trace.dy, frac);
-        z = shootz + FixedMul (aimslope, FixedMul(frac, attackrange));
+        // [SVE] svillarreal
+        sidesector = (P_PointOnLineSide(shootthing->x, shootthing->y, li)) ? li->backsector : li->frontsector;
+        hitz = shootz + FixedMul(aimslope, dist);
 
-        if (li->frontsector->ceilingpic == skyflatnum)
+        if(sidesector != NULL)
+        {
+            if(!(hitz > sidesector->floorheight && hitz < sidesector->ceilingheight))
+            {
+                // ceiling/floor has been contacted
+                hitplane = true;
+            }
+        }
+
+        //
+        // [SVE] svillarreal - hit ceiling/floor
+        // set position based on intersection
+        //
+        if(hitplane == true && sidesector)
+        {
+            fixed_t den;
+            fixed_t num;
+
+            // determine where we've hit
+            if(hitz <= sidesector->floorheight)
+            {
+                den = shootdirz;
+                if(den == 0)
+                {
+                    den = FRACUNIT;
+                }
+
+                num = shootz - sidesector->floorheight;
+            }
+            else
+            {
+                den = -shootdirz;
+                if(den == 0)
+                {
+                    den = -FRACUNIT;
+                }
+
+                num = -shootz + sidesector->ceilingheight;
+            }
+
+            // position on plane
+            frac = FixedDiv(FixedDiv(-num, den), attackrange);
+
+            hitx = shootdirx;
+            hity = shootdiry;
+        }
+        else
+        {
+            // position a bit closer
+            frac = in->frac - FixedDiv (4*FRACUNIT,attackrange);
+
+            hitx = p_trace.dx;
+            hity = p_trace.dy;
+        }
+
+        x = p_trace.x + FixedMul(hitx, frac);
+        y = p_trace.y + FixedMul(hity, frac);
+        z = shootz + FixedMul(aimslope, FixedMul(frac, attackrange));
+
+        if(li->frontsector->ceilingpic == skyflatnum)
         {
             // don't shoot the sky!
-            if (z > li->frontsector->ceilingheight)
+            if(z > li->frontsector->ceilingheight)
                 return false;
 
             // it's a sky hack wall
-            if	(li->backsector && li->backsector->ceilingpic == skyflatnum)
+            // [SVE] svillarreal - added ceiling height check fix
+            if(li->backsector && li->backsector->ceilingpic == skyflatnum
+                && li->backsector->ceilingheight < z)
+            {
                 return false;
+            }
         }
 
         // villsa [STRIFE]
         if(la_damage > 0)
         {
+            mobj_t *puff;
+
             // villsa [STRIFE] Test against Mauler attack range
             if(attackrange != 2112*FRACUNIT)
-                P_SpawnPuff(x, y, z); // Spawn bullet puffs.
+                puff = P_SpawnPuff(x, y, z); // Spawn bullet puffs.
             else
-                P_SpawnMobj(x, y, z, MT_STRIFEPUFF3);
+                puff = P_SpawnMobj(x, y, z, MT_STRIFEPUFF3);
+
+            // [SVE] svillarreal - clip to floor or ceiling
+            if(puff->z > puff->ceilingz)
+            {
+                puff->z = puff->ceilingz;
+                puff->prevpos.z = puff->z;
+            }
+
+            if(puff->z < puff->floorz)
+            {
+                puff->z = puff->floorz;
+                puff->prevpos.z = puff->z;
+            }
+
+            // [SVE] svillarreal - spawn decals
+            if(use3drenderer && puff->info->flags2 & MF2_MARKDECAL)
+            {
+                fixed_t old_z;
+
+                if(puff->z - puff->floorz <= (3*FRACUNIT))
+                {
+                    old_z = puff->z;
+                    puff->z = puff->floorz;
+
+                    RB_SpawnFloorDecal(puff, true);
+                    puff->z = old_z;
+                }
+                else if(puff->ceilingz - puff->z <= (3*FRACUNIT))
+                {
+                    old_z = puff->z;
+                    puff->z = puff->ceilingz;
+
+                    RB_SpawnFloorDecal(puff, false);
+                    puff->z = old_z;
+                }
+                else
+                {
+                    fixed_t oldx = puff->momx;
+                    fixed_t oldy = puff->momy;
+                    
+                    puff->momx = puff->x - p_trace.x;
+                    puff->momy = puff->y - p_trace.y;
+                    RB_SpawnWallDecal(puff);
+                    
+                    puff->momx = oldx;
+                    puff->momy = oldy;
+                }
+            }
         }
         
         // don't go any farther
-        return false;	
+        return false;   
     }
 
     // shoot a thing
@@ -1155,7 +1304,7 @@ hitline:
     if (th == shootthing)
         return true;        // can't shoot self
 
-    if (!(th->flags&MF_SHOOTABLE))
+    if(!(th->flags&MF_SHOOTABLE))
         return true;        // corpse or something
 
     // haleyjd 09/18/10: [STRIFE] Corrected - not MVIS, but SPECTRAL.
@@ -1163,23 +1312,23 @@ hitline:
         return true;        // is a spectral entity
 
     // check angles to see if the thing can be aimed at
-    dist = FixedMul (attackrange, in->frac);
-    thingtopslope = FixedDiv (th->z+th->height - shootz , dist);
+    dist = FixedMul(attackrange, in->frac);
+    thingtopslope = FixedDiv(th->z+th->height - shootz , dist);
 
-    if (thingtopslope < aimslope)
+    if(thingtopslope < aimslope)
         return true;        // shot over the thing
 
-    thingbottomslope = FixedDiv (th->z - shootz, dist);
+    thingbottomslope = FixedDiv(th->z - shootz, dist);
 
-    if (thingbottomslope > aimslope)
+    if(thingbottomslope > aimslope)
         return true;        // shot under the thing
 
     // hit thing
     // position a bit closer
     frac = in->frac - FixedDiv (10*FRACUNIT,attackrange);
 
-    x = trace.x + FixedMul (trace.dx, frac);
-    y = trace.y + FixedMul (trace.dy, frac);
+    x = p_trace.x + FixedMul (p_trace.dx, frac);
+    y = p_trace.y + FixedMul (p_trace.dy, frac);
     z = shootz + FixedMul (aimslope, FixedMul(frac, attackrange));
 
     // villsa [STRIFE] Check for Mauler attack range
@@ -1197,7 +1346,7 @@ hitline:
 
     // Spawn bullet puffs or blod spots,
     // depending on target type.
-    if (in->d.thing->flags & MF_NOBLOOD)
+    if(in->d.thing->flags & MF_NOBLOOD)
         P_SpawnSparkPuff(x, y, z);  // villsa [STRIFE] call spark puff function instead
     else
         P_SpawnBlood (x,y,z, la_damage);
@@ -1215,9 +1364,9 @@ hitline:
 //
 fixed_t
 P_AimLineAttack
-( mobj_t*	t1,
-  angle_t	angle,
-  fixed_t	distance )
+( mobj_t*   t1,
+  angle_t   angle,
+  fixed_t   distance )
 {
     fixed_t     x2;
     fixed_t     y2;
@@ -1227,28 +1376,41 @@ P_AimLineAttack
     angle >>= ANGLETOFINESHIFT;
     shootthing = t1;
     
-    x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
-    y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
+    if(t1->player)
+    {
+        // [SVE] svillarreal - for player pitch aiming
+        angle_t pitch = ((t1->player->pitch / 256) << 14);
+        pitch >>= ANGLETOFINESHIFT;
+
+        x2 = t1->x + FixedMul(FixedMul(finecosine[pitch], finecosine[angle]), distance);
+        y2 = t1->y + FixedMul(FixedMul(finecosine[pitch], finesine[angle]), distance);
+    }
+    else
+    {
+        x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
+        y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
+    }
+
     shootz = t1->z + (t1->height>>1) + 8*FRACUNIT;
 
     // can't shoot outside view angles
-    topslope = 100*FRACUNIT/160;	
+    topslope = 100*FRACUNIT/160;    
     bottomslope = -100*FRACUNIT/160;
     
     attackrange = distance;
     linetarget = NULL;
 
-    P_PathTraverse ( t1->x, t1->y,
-                     x2, y2,
-                     PT_ADDLINES|PT_ADDTHINGS,
-                     PTR_AimTraverse );
+    P_PathTraverse(t1->x, t1->y,
+                   x2, y2,
+                   PT_ADDLINES|PT_ADDTHINGS,
+                   PTR_AimTraverse);
 
-    if (linetarget)
+    if(linetarget)
         return aimslope;
     else    // villsa [STRIFE] checks for player pitch
     {
         if(t1->player)
-            return (t1->player->pitch << FRACBITS) / 160;
+            return t1->player->pitch / 200;
     }
 
     return 0;
@@ -1268,7 +1430,7 @@ P_LineAttack
   angle_t       angle,
   fixed_t       distance,
   fixed_t       slope,
-  int	        damage )
+  int           damage )
 {
     fixed_t     x2;
     fixed_t     y2;
@@ -1277,11 +1439,33 @@ P_LineAttack
     angle >>= ANGLETOFINESHIFT;
     shootthing = t1;
     la_damage = damage;
-    x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
-    y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
     shootz = t1->z + (t1->height>>1) + 8*FRACUNIT;
     attackrange = distance;
     aimslope = slope;
+
+    if(t1->player)
+    {
+        // [SVE] svillarreal - for player pitch aiming
+        angle_t pitch = ((t1->player->pitch / 256) << 14);
+        pitch >>= ANGLETOFINESHIFT;
+
+        shootdirx = FixedMul(FixedMul(finecosine[pitch], finecosine[angle]), distance);
+        shootdiry = FixedMul(FixedMul(finecosine[pitch], finesine[angle]), distance);
+
+        x2 = t1->x + shootdirx;
+        y2 = t1->y + shootdiry;
+    }
+    else
+    {
+        x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
+        y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
+
+        shootdirx = x2 - t1->x;
+        shootdiry = y2 - t1->y;
+    }
+
+    // [SVE] svillarreal - for plane hit detection
+    shootdirz = aimslope;
 
     // villsa [STRIFE] test lines only if damage is <= 0
     if(damage >= 1)
@@ -1334,6 +1518,28 @@ boolean PTR_UseTraverse (intercept_t* in)
     return false;
 }
 
+//
+// PTR_NoWayTraverse
+//
+// haleyjd 20140907: [SVE] Check for when the player should oof on lines that
+// aren't caught by the normal checks.
+//
+static boolean PTR_NoWayTraverse(intercept_t *in)
+{
+    line_t *ld = in->d.line;
+
+    // ignore specials
+    if(ld->special)
+        return true;
+
+    P_LineOpening(ld);
+
+    // check opening range
+    return 
+        !(openrange  <= 0 ||
+          openbottom > usething->z + 41 * FRACUNIT ||
+          opentop    < usething->z + usething->height);
+}
 
 //
 // P_UseLines
@@ -1341,7 +1547,7 @@ boolean PTR_UseTraverse (intercept_t* in)
 //
 // [STRIFE] Verified unmodified
 //
-void P_UseLines (player_t*	player)
+void P_UseLines (player_t*  player)
 {
     int     angle;
     fixed_t x1;
@@ -1358,7 +1564,9 @@ void P_UseLines (player_t*	player)
     x2 = x1 + (USERANGE>>FRACBITS)*finecosine[angle];
     y2 = y1 + (USERANGE>>FRACBITS)*finesine[angle];
 
-    P_PathTraverse ( x1, y1, x2, y2, PT_ADDLINES, PTR_UseTraverse );
+    if(P_PathTraverse(x1, y1, x2, y2, PT_ADDLINES, PTR_UseTraverse))
+        if(!P_PathTraverse(x1, y1, x2, y2, PT_ADDLINES, PTR_NoWayTraverse))
+            S_StartSound(usething, sfx_noway); // haleyjd: [SVE] oof for 2S lines
 }
 
 
@@ -1409,6 +1617,13 @@ boolean PIT_RadiusAttack (mobj_t* thing)
 
     if (dist >= bombdamage)
         return true;        // out of range
+
+    // [SVE]: outside classicmode, players are z-clipped with respect to blast radii
+    if(!classicmode && thing->player &&
+        ((abs(thing->z - bombspot->z) / FRACUNIT) > 2 * bombdamage))
+    {
+        return true;
+    }
 
     if ( P_CheckSight (thing, bombspot) )
     {
@@ -1480,8 +1695,8 @@ P_RadiusAttack
 //  the way it was and call P_ChangeSector again
 //  to undo the changes.
 //
-boolean		crushchange;
-boolean		nofit;
+boolean     crushchange;
+boolean     nofit;
 
 
 //
@@ -1491,7 +1706,7 @@ boolean		nofit;
 //
 boolean PIT_ChangeSector (mobj_t*   thing)
 {
-    mobj_t*	mo;
+    mobj_t* mo;
 
     if (P_ThingHeightClip (thing))
     {
@@ -1644,4 +1859,25 @@ static void SpechitOverrun(line_t *ld)
             break;
     }
 }
+
+//
+// P_SaveSectorPositions
+//
+// haleyjd 20140904: [SVE] Backup current sector floor and ceiling heights to
+// the sector interpolation structures at the beginning of a frame.
+//
+void P_SaveSectorPositions(void)
+{
+    int i;
+    for(i = 0; i < numsectors; i++)
+    {
+        sectorinterp_t *si  = &sectorinterps[i];
+        sector_t       *sec = &sectors[i];
+
+        si->prevfloorheight   = sec->floorheight;
+        si->prevceilingheight = sec->ceilingheight;
+    }
+}
+
+// EOF
 

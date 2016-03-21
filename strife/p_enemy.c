@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -43,6 +44,11 @@
 #include "w_wad.h"
 #include "f_finale.h"
 #include "p_inter.h"
+
+// [SVE] svillarreal
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
 
 // Forward Declarations:
 void A_RandomWalk(mobj_t *);
@@ -128,7 +134,7 @@ P_RecursiveSound
     
     sec->validcount = validcount;
     sec->soundtraversed = soundblocks+1;
-    sec->soundtarget = soundtarget;
+    P_SetTarget(&sec->soundtarget, soundtarget);
 	
     for (i=0 ;i<sec->linecount ; i++)
     {
@@ -185,7 +191,7 @@ static void P_WakeUpThing(mobj_t* puncher, mobj_t* bystander)
 {
     if(!(bystander->flags & MF_NODIALOG))
     {
-        bystander->target = puncher;
+        P_SetTarget(&bystander->target, puncher);
         if(bystander->info->seesound)
             S_StartSound(bystander, bystander->info->seesound);
         P_SetMobjState(bystander, bystander->info->seestate);
@@ -216,8 +222,11 @@ void P_DoPunchAlert(mobj_t *puncher, mobj_t *punchee)
       return;
    
    // make the punchee hurt - haleyjd 09/05/10: Fixed to use painstate.
-   punchee->target = puncher;
-   P_SetMobjState(punchee, punchee->info->painstate); 
+   P_SetTarget(&punchee->target, puncher);
+
+   // haleyjd 20140817: [SVE] Fix punch dagger removal glitch
+   if(classicmode || punchee->info->painstate)
+       P_SetMobjState(punchee, punchee->info->painstate); 
    
    // wake up everybody nearby
    
@@ -718,6 +727,82 @@ void P_NewRandomDir(mobj_t* actor)
 extern void P_BulletSlope (mobj_t *mo);
 
 //
+// P_allyFindTarget
+//
+// haleyjd 20140918: [SVE] separated out of P_LookForPlayers for 
+// CTC support. If returns false, P_LookForPlayers should return false.
+//
+static boolean P_allyFindTarget(mobj_t *actor,  mobj_t *master)
+{
+    // haleyjd 09/06/10: Note that this sets actor->target in Strife!
+    P_BulletSlope(actor);
+
+    // Clear target if nothing is visible, or if the target is a
+    // friendly Rebel or the allied player.
+    if (linetarget == NULL || 
+        (actor->target->type == MT_REBEL1 && 
+         actor->target->miscdata == actor->miscdata) || 
+        actor->target == master)
+    {
+        P_SetTarget(&actor->target, NULL);
+        actor->threshold = 25; // [SVE]
+        return false;
+    }
+
+    return true;
+}
+
+//
+// P_allyFindMonster
+//
+// haleyjd 20141024: [SVE] Improved AI for Rebels when in single player w/o
+// classicmode toggle.
+//
+static boolean P_allyFindMonster(mobj_t *actor)
+{
+    thinker_t *th;
+
+    if(classicmode || deathmatch)
+        return false; // this isn't for classic or for multiplayer
+
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        mobj_t *mo;
+
+        if(th->function.acp1 != (actionf_p1)P_MobjThinker)
+            continue;
+
+        mo = (mobj_t *)th;
+
+        if(!(mo->flags & MF_COUNTKILL) || // not killable?
+            mo == actor                || // self?
+            mo->health <= 0            || // dead?
+            (mo->flags & MF_ALLY)      || // allied?
+            mo->player)                   // is a player?
+            continue;
+
+        // no rebel attack?
+        if(mo->info->flags2 & MF2_NOREBELATTACK)
+            continue;
+
+        // skip some at random
+        if(P_Random() < 16)
+            continue;
+
+        // needs to be within sight
+        if(!P_CheckSight(actor, mo))
+            continue; 
+
+        // got one
+        P_SetTarget(&actor->target, mo);
+        actor->threshold = 25; // [SVE]
+        return true;
+    }
+
+    return false;
+}
+
+//
 // P_LookForPlayers
 //
 // If allaround is false, only look 180 degrees in front.
@@ -744,37 +829,29 @@ P_LookForPlayers
         // Deathmatch: support team behavior for Rebels.
         if(netgame)
         {
-            // Rebels adopt the allied player's target if it is not of the same
-            // allegiance. Other allies do it unconditionally.
             if(master && master->target && 
                (master->target->type != MT_REBEL1 ||
                 master->target->miscdata != actor->miscdata))
             {
-                actor->target = master->target;
+                // Rebels adopt the allied player's target if it is not of the same
+                // allegiance. Other allies do it unconditionally.
+                P_SetTarget(&actor->target, master->target);
             }
             else
             {
-                // haleyjd 09/06/10: Note that this sets actor->target in Strife!
-                P_BulletSlope(actor);
-
-                // Clear target if nothing is visible, or if the target is a
-                // friendly Rebel or the allied player.
-                if (linetarget == NULL
-                 || (actor->target->type == MT_REBEL1
-                  && actor->target->miscdata == actor->miscdata)
-                 || actor->target == master)
-                {
-                    actor->target = NULL;
+                if(!P_allyFindTarget(actor, master))
                     return false;
-                }
             }
         }
         else
         {
             // Single-player: Adopt any non-allied player target.
-            if(master && master->target && !(master->target->flags & MF_ALLY))
+            // [SVE]: if outside classic mode, VALID targets only.
+            if(master && master->target && !(master->target->flags & MF_ALLY) &&
+                (classicmode || 
+                 (master->target->health > 0 && master->target->flags & MF_SHOOTABLE)))
             {
-                actor->target = master->target;
+                P_SetTarget(&actor->target, master->target);
                 return true;
             }
 
@@ -782,10 +859,15 @@ P_LookForPlayers
             P_BulletSlope(actor);
 
             // Clear target if nothing is visible, or if the target is an ally.
-            if(!linetarget || actor->target->flags & MF_ALLY)
+            if(!linetarget || actor->target->flags & MF_ALLY ||
+               (!classicmode && actor->target->info->flags2 & MF2_NOREBELATTACK))
             {
-                actor->target = NULL;
-                return false;
+                // [SVE]: improved rebel AI
+                if(!P_allyFindMonster(actor))
+                {
+                    P_SetTarget(&actor->target, NULL);
+                    return false;
+                }
             }
         }
 
@@ -840,7 +922,7 @@ P_LookForPlayers
             }
         }
 
-        actor->target = player->mo;
+        P_SetTarget(&actor->target, player->mo);
         return true;
     }
 
@@ -875,7 +957,7 @@ void A_Look (mobj_t* actor)
             A_RandomWalk(actor);
         else
         {
-            actor->target = targ;
+            P_SetTarget(&actor->target, targ);
 
             if ( actor->flags & MF_AMBUSH )
             {
@@ -956,6 +1038,79 @@ void A_RandomWalk(mobj_t* actor)
 }
 
 //
+// haleyjd 20141026: [SVE] More rebel logic for Capture the Chalice
+//
+static void P_allyFindCTCTarget(mobj_t *rebel, boolean setstate)
+{
+    int i;
+    int masterteam = players[rebel->miscdata].allegiance;
+    thinker_t *th;
+
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        // not playing?
+        if(!playeringame[i])
+            continue;
+
+        // on our team?
+        if(players[i].allegiance == masterteam)
+            continue;
+
+        // not spawned, alive, or shootable?
+        if(!players[i].mo || players[i].mo->health <= 0 ||
+           !(players[i].mo->flags & MF_SHOOTABLE))
+           continue;
+
+        // visible?
+        if(!P_CheckSight(rebel, players[i].mo))
+            continue;
+
+        // got one.
+        P_SetTarget(&rebel->target, players[i].mo);
+        rebel->threshold = 2*BASETHRESHOLD;
+        if(setstate)
+            P_SetMobjState(rebel, rebel->info->seestate);
+        rebel->flags |= MF_NODIALOG;
+        return;
+    }
+
+    // check for enemy rebels
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        mobj_t *mo;
+
+        if(th->function.acp1 != (actionf_p1)P_MobjThinker)
+            continue;
+
+        mo = (mobj_t *)th;
+
+        // not a rebel?
+        if(mo->type != MT_REBEL1)
+            continue;
+
+        // allied?
+        if(mo->miscdata == rebel->miscdata)
+            continue;
+
+        // not valid or alive?
+        if(!(mo->flags & MF_SHOOTABLE) || mo->health <= 0)
+            continue;
+
+        // visible?
+        if(!P_CheckSight(rebel, mo))
+            continue;
+
+        // got one.
+        P_SetTarget(&rebel->target, mo);
+        rebel->threshold = BASETHRESHOLD;
+        if(setstate)
+            P_SetMobjState(rebel, rebel->info->seestate);
+        rebel->flags |= MF_NODIALOG;
+        return;
+    }
+}
+
+//
 // A_FriendLook
 //
 // [STRIFE] New function
@@ -968,7 +1123,14 @@ void A_FriendLook(mobj_t* actor)
 
     actor->threshold = 0;
 
-    if(soundtarget && soundtarget->flags & MF_SHOOTABLE)
+    // [SVE]: Capture the Chalice
+    if(actor->type == MT_REBEL1 && deathmatch)
+    {
+        P_allyFindCTCTarget(actor, true);
+        if(actor->target)
+            return;
+    }
+    else if(soundtarget && soundtarget->flags & MF_SHOOTABLE)
     {
         // Handle allies, except on maps 3 and 34 (Front Base/Movement Base)
         if((actor->flags & MF_ALLY) == (soundtarget->flags & MF_ALLY) &&
@@ -984,7 +1146,7 @@ void A_FriendLook(mobj_t* actor)
         }
         else
         {
-            actor->target = soundtarget;
+            P_SetTarget(&actor->target, soundtarget);
 
             if(!(actor->flags & MF_AMBUSH) || P_CheckSight(actor, actor->target))
             {
@@ -1017,6 +1179,10 @@ void A_Listen(mobj_t* actor)
 {
     mobj_t *soundtarget;
 
+    // haleyjd 20141128: [SVE] no alarms in nomonsters non-classicmode deathmatch
+    if(actor->type == MT_MISC_01 && deathmatch && nomonsters && !classicmode)
+        return;
+
     actor->threshold = 0;
 
     soundtarget = actor->subsector->sector->soundtarget;
@@ -1025,7 +1191,7 @@ void A_Listen(mobj_t* actor)
     {
         if((actor->flags & MF_ALLY) != (soundtarget->flags & MF_ALLY))
         {
-            actor->target = soundtarget;
+            P_SetTarget(&actor->target, soundtarget);
 
             if(!(actor->flags & MF_AMBUSH) || P_CheckSight(actor, actor->target))
             {
@@ -1077,6 +1243,42 @@ void A_Chase (mobj_t*	actor)
             actor->angle += ANG90/2;
     }
 
+    // [SVE] 20141026: CTC
+    if(actor->type == MT_REBEL1 && deathmatch &&
+       (!actor->target                               || // no target
+        !(actor->target->flags & MF_SHOOTABLE)       || // invalid target
+        actor->target->health <= 0                   || // dead target
+        (actor->target->type == MT_REBEL1 &&
+         actor->miscdata == actor->target->miscdata) || // target monster on same team
+        (actor->target->player &&                       // target player on same team
+         actor->target->player->allegiance == players[actor->miscdata].allegiance)))
+    {
+        P_SetTarget(&actor->target, NULL);
+        P_allyFindCTCTarget(actor, false);
+        if(!actor->target)
+        {
+            P_SetMobjState(actor, actor->info->spawnstate);
+            return;
+        }
+    }
+    else if(!(classicmode || deathmatch) && // [SVE] 20141024: enhanced rebel AI
+        actor->flags & MF_ALLY &&
+        (!actor->target ||
+         !(actor->target->flags & MF_SHOOTABLE) ||
+         actor->target->health <= 0))
+    {
+        if(!P_LookForPlayers(actor, true))
+        {
+            // walk toward player if no valid target
+            mobj_t *oldtarget = actor->target;
+            P_SetTarget(&actor->target, players[0].mo);
+            if (--actor->movecount<0 || !P_Move (actor))
+                P_NewChaseDir(actor);
+            P_SetTarget(&actor->target, oldtarget);
+            return;
+        }
+    }
+
     if (!actor->target
         || !(actor->target->flags&MF_SHOOTABLE))
     {
@@ -1091,9 +1293,16 @@ void A_Chase (mobj_t*	actor)
     // do not attack twice in a row
     if (actor->flags & MF_JUSTATTACKED)
     {
+        boolean fast = fastparm;
+
+        // [SVE]: fix ridiculously unfair situation on MAP02
+        if(!classicmode && gamemap == 2 && 
+            actor->type >= MT_GUARD1 && actor->type <= MT_SHADOWGUARD)
+            fast = false;
+
         actor->flags &= ~MF_JUSTATTACKED;
         // [STRIFE] Checks only against fastparm, not gameskill == 5
-        if (!fastparm)
+        if (!fast)
             P_NewChaseDir (actor);
         return;
     }
@@ -1112,8 +1321,15 @@ void A_Chase (mobj_t*	actor)
     // check for missile attack
     if (actor->info->missilestate)
     {
+        boolean fast = fastparm;
+
+        // [SVE]: fix ridiculously unfair situation on MAP02
+        if(!classicmode && gamemap == 2 && 
+            actor->type >= MT_GUARD1 && actor->type <= MT_SHADOWGUARD)
+            fast = false;
+
         // [STRIFE] Checks only fastparm.
-        if (!fastparm && actor->movecount)
+        if (!fast && actor->movecount)
         {
             goto nomissile;
         }
@@ -1135,7 +1351,13 @@ nomissile:
         && !actor->threshold
         && !P_CheckSight (actor, actor->target) )
     {
-        if (P_LookForPlayers(actor, true))
+        if(deathmatch && actor->type == MT_REBEL1) // [SVE]
+        {
+            P_allyFindCTCTarget(actor, false);
+            if(actor->target)
+                return;
+        }
+        else if (P_LookForPlayers(actor, true))
             return; // got a new target
     }
     
@@ -1151,15 +1373,23 @@ nomissile:
     // * Acolytes have randomized wandering sounds
 
     // make active sound
-    if (actor->info->activesound && P_Random () < 38)
     {
-        if(actor->info->activesound >= sfx_agrac1 &&
-           actor->info->activesound <= sfx_agrac4)
+        int chance = 38;
+
+        // haleyjd 20141103: [SVE] less noisy rats, by user request
+        if(!classicmode && actor->type == MT_RAT)
+            chance = 8;
+
+        if (actor->info->activesound && P_Random () < chance)
         {
-            S_StartSound(actor, sfx_agrac1 + P_Random() % 4);
+            if(actor->info->activesound >= sfx_agrac1 &&
+                actor->info->activesound <= sfx_agrac4)
+            {
+                S_StartSound(actor, sfx_agrac1 + P_Random() % 4);
+            }
+            else
+                S_StartSound(actor, actor->info->activesound);
         }
-        else
-            S_StartSound(actor, actor->info->activesound);
     }
 }
 
@@ -1316,6 +1546,10 @@ void A_SentinelAttack(mobj_t* actor)
     angle_t an;
     int i;
 
+    // [SVE] svillarreal - exit if no target
+    if(!actor->target)
+        return;
+
     mo = P_SpawnFacingMissile(actor, actor->target, MT_L_LASER);
     an = actor->angle >> ANGLETOFINESHIFT;
 
@@ -1327,7 +1561,7 @@ void A_SentinelAttack(mobj_t* actor)
             y = mo->y + FixedMul(mobjinfo[MT_L_LASER].radius * i, finesine[an]);
             z = mo->z + i * (mo->momz >> 2);
             mo2 = P_SpawnMobj(x, y, z, MT_R_LASER);
-            mo2->target = actor;
+            P_SetTarget(&mo2->target, actor);
             mo2->momx = mo->momx;
             mo2->momy = mo->momy;
             mo2->momz = mo->momz;
@@ -1769,9 +2003,9 @@ void A_ProgrammerAttack(mobj_t* actor)
     mo = P_SpawnMobj(actor->target->x, actor->target->y, ONFLOORZ, 
                      MT_SIGIL_A_GROUND);
     mo->threshold = 25;
-    mo->target = actor;
+    P_SetTarget(&mo->target, actor);
     mo->health = -2;
-    mo->tracer = actor->target;
+    P_SetTarget(&mo->tracer, actor->target);
 }
 
 //
@@ -1806,12 +2040,12 @@ void A_Sigil_A_Action(mobj_t* actor)
 
     mo = P_SpawnMobj(x, y, ONCEILINGZ, type);
     mo->momz = -18 * FRACUNIT;
-    mo->target = actor->target;
+    P_SetTarget(&mo->target, actor->target);
     mo->health = actor->health;
 
     mo = P_SpawnMobj(actor->x, actor->y,  ONCEILINGZ, MT_SIGIL_A_ZAP_RIGHT);
     mo->momz = -18 * FRACUNIT;
-    mo->target = actor->target;
+    P_SetTarget(&mo->target, actor->target);
     mo->health = actor->health;
 }
 
@@ -1850,15 +2084,15 @@ void A_SpectreCAttack(mobj_t* actor)
 
     mo = P_SpawnMobj(actor->x, actor->y, actor->z + (32*FRACUNIT), MT_SIGIL_A_ZAP_RIGHT);
     mo->momz = -(18*FRACUNIT);
-    mo->target = actor;
+    P_SetTarget(&mo->target, actor);
     mo->health = -2;
-    mo->tracer = actor->target;
+    P_SetTarget(&mo->tracer, actor->target);
     
     actor->angle -= ANG90;
     for(i = 0; i < 20; i++)
     {
         actor->angle += (ANG90 / 10);
-        mo = P_SpawnMortar(actor, MT_SIGIL_C_SHOT);
+        mo = P_SpawnMortar(actor, actor, MT_SIGIL_C_SHOT);
         mo->health = -2;
         mo->z = actor->z + (32*FRACUNIT);
     }
@@ -1884,8 +2118,12 @@ void A_AlertSpectreC(mobj_t* actor)
 
             if(mo->type == MT_SPECTRE_C)
             {
-                P_SetMobjState(mo, mo->info->seestate);
-                mo->target = actor->target;
+                // haleyjd 20140817: [SVE] Fix ghost spectre bug
+                if(classicmode || mo->health > 0)
+                {
+                    P_SetMobjState(mo, mo->info->seestate);
+                    P_SetTarget(&mo->target, actor->target);
+                }
                 return;
             }
         }
@@ -1902,14 +2140,13 @@ void A_AlertSpectreC(mobj_t* actor)
 void A_Sigil_E_Action(mobj_t* actor)
 {
     actor->angle += ANG90;
-    P_SpawnMortar(actor, MT_SIGIL_E_OFFSHOOT);
+    P_SpawnMortar(actor, actor->target, MT_SIGIL_E_OFFSHOOT);
 
     actor->angle -= ANG180;
-    P_SpawnMortar(actor, MT_SIGIL_E_OFFSHOOT);
+    P_SpawnMortar(actor, actor->target, MT_SIGIL_E_OFFSHOOT);
 
     actor->angle += ANG90;
-    P_SpawnMortar(actor, MT_SIGIL_E_OFFSHOOT);
-
+    P_SpawnMortar(actor, actor->target, MT_SIGIL_E_OFFSHOOT);
 }
 
 //
@@ -1946,7 +2183,7 @@ void A_SpectreDAttack(mobj_t* actor)
 
     mo = P_SpawnMissile(actor, actor->target, MT_SIGIL_SD_SHOT);
     mo->health = -2;
-    mo->tracer = actor->target;
+    P_SetTarget(&mo->tracer, actor->target);
 }
 
 //
@@ -2047,7 +2284,7 @@ void A_BishopAttack(mobj_t* actor)
     actor->z += MAXRADIUS;
 
     mo = P_SpawnMissile(actor, actor->target, MT_SEEKMISSILE);
-    mo->tracer = actor->target;
+    P_SetTarget(&mo->tracer, actor->target);
 
     actor->z -= MAXRADIUS;
 }
@@ -2320,6 +2557,35 @@ void A_Fall (mobj_t *actor)
     // actor is on ground, it can be walked over
     // villsa [STRIFE] remove nogravity/shadow flags as well
     actor->flags &= ~(MF_SOLID|MF_NOGRAVITY|MF_SHADOW);
+
+    // [SVE]: clear MVIS too, outside classic mode; fixes glitch with Shadow Acolytes
+    if(!classicmode)
+        actor->flags &= ~MF_MVIS;
+
+    // haleyjd 20140907: [SVE] max gore blood spray
+    if(!classicmode && d_maxgore && !(actor->flags & MF_NOBLOOD))
+    {
+        int i, t;
+        mobj_t *mo;
+
+        for(i = 0; i < 8; i++)
+        {
+            // spray blood in a random direction
+            mo = P_SpawnMobj(actor->x,
+                             actor->y,
+                             actor->z + actor->info->height/2, MT_BLOOD_GORE);
+
+            t = P_Random() % 3;
+            if(t > 0)
+                P_SetMobjState(mo, S_SPRY_00 + t);
+
+            t = P_Random();
+            mo->momx = (t - P_Random ()) << 11;
+            t = P_Random();
+            mo->momy = (t - P_Random ()) << 11;
+            mo->momz = P_Random() << 11;
+        }
+    }
 }
 
 //
@@ -2333,7 +2599,7 @@ void A_HideZombie(mobj_t* actor)
     line_t junk;
 
     junk.tag = 999;
-    EV_DoDoor(&junk, vld_blazeClose);
+    EV_DoDoor(&junk, dr_blazeClose);
 
     if(actor->target && actor->target->player)
         P_NoiseAlert(actor->target, actor); // inlined in asm
@@ -2351,7 +2617,7 @@ void A_MerchantPain(mobj_t* actor)
     line_t junk;
 
     junk.tag = 999;
-    EV_DoDoor(&junk, vld_shopClose);
+    EV_DoDoor(&junk, dr_shopClose);
 
     if(actor->target && actor->target->player)
         P_NoiseAlert(actor->target, actor); // inlined in asm
@@ -2547,7 +2813,7 @@ void A_EntityDeath(mobj_t* actor)
     subentity = P_SpawnMobj(FixedMul(finecosine[an], dist) + entity_pos_x,
                             FixedMul(finesine[an],   dist) + entity_pos_y,
                             entity_pos_z, MT_SUBENTITY);
-    subentity->target = actor->target;
+    P_SetTarget(&subentity->target, actor->target);
     A_FaceTarget(subentity);
     P_ThrustMobj(subentity, subentity->angle, 625 << 13);
 
@@ -2556,7 +2822,7 @@ void A_EntityDeath(mobj_t* actor)
     subentity = P_SpawnMobj(FixedMul(finecosine[an], dist) + entity_pos_x, 
                             FixedMul(finesine[an],   dist) + entity_pos_y,
                             entity_pos_z, MT_SUBENTITY);
-    subentity->target = actor->target;
+    P_SetTarget(&subentity->target, actor->target);
     P_ThrustMobj(subentity, actor->angle + ANG90, 4);
     A_FaceTarget(subentity);
 
@@ -2565,7 +2831,7 @@ void A_EntityDeath(mobj_t* actor)
     subentity = P_SpawnMobj(FixedMul(finecosine[an], dist) + entity_pos_x, 
                             FixedMul(finesine[an],   dist) + entity_pos_y,
                             entity_pos_z, MT_SUBENTITY);
-    subentity->target = actor->target;
+    P_SetTarget(&subentity->target, actor->target);
     P_ThrustMobj(subentity, actor->angle - ANG90, 4);
     A_FaceTarget(subentity);
 }
@@ -2577,7 +2843,9 @@ void A_EntityDeath(mobj_t* actor)
 //
 void A_SpawnZombie(mobj_t* actor)
 {
-    P_SpawnMobj(actor->x, actor->y, actor->z, MT_ZOMBIE);
+    mobj_t *zombie = P_SpawnMobj(actor->x, actor->y, actor->z, MT_ZOMBIE);
+    if(!classicmode)
+        zombie->flags |= MF_NODIALOG; // [SVE]: zombies shouldn't really talk.
 }
 
 //
@@ -2597,7 +2865,16 @@ void A_ZombieInSpecialSector(mobj_t* actor)
         return;
 
     if(sector->special <= 15)
-        P_DamageMobj(actor, NULL, NULL, 999);
+    {
+        if(actor->type == MT_DEGNINORE)
+            return;
+
+        // [SVE] svillarreal - just simply remove it
+        if(!classicmode)
+            P_RemoveMobj(actor);
+        else
+            P_DamageMobj(actor, NULL, NULL, 999);
+    }
     else if(sector->special == 18)
     {
         tagval = sector->tag - 100;
@@ -2660,6 +2937,12 @@ void P_FreePrisoners(void)
         P_GiveItemToPlayer(&players[i], SPR_TOKN, MT_TOKEN_QUEST13);
         players[i].message = pmsgbuffer;
     }
+
+// [SVE] svillarreal - lending a hand achievement
+#ifdef _USE_STEAM_
+    if(!P_CheckPlayersCheating(ACH_ALLOW_SP) && gamemap == 5)
+        I_SteamSetAchievement("SVE_ACH_PRISONERS");
+#endif
 }
 
 //
@@ -2682,6 +2965,38 @@ void P_DestroyConverter(void)
         P_GiveItemToPlayer(&players[i], SPR_TOKN, MT_TOKEN_NEW_ACCURACY);
         players[i].message = pmsgbuffer;
     }
+}
+
+//
+// P_ClaxonsActive
+//
+// [SVE] svillarreal - Checks if any claxon in the level
+// are active or has a target
+//
+
+boolean P_ClaxonsActive(void)
+{
+    thinker_t *th;
+
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t*)th;
+
+            if(mo->type == MT_MISC_01)
+            {
+                if( mo->target != NULL ||
+                    mo->reactiontime != mo->info->reactiontime ||
+                    mo->lastlook == -1)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 //
@@ -2824,7 +3139,8 @@ void A_MissileTick(mobj_t* actor)
 //
 void A_SpawnGrenadeFire(mobj_t* actor)
 {
-    P_SpawnMobj(actor->x, actor->y, actor->z, MT_PFLAME);
+    mobj_t *mo = P_SpawnMobj(actor->x, actor->y, actor->z, MT_PFLAME);
+    P_SetTarget(&mo->target, actor->target);
 }
 
 //
@@ -2894,6 +3210,7 @@ void A_BurnSpread(mobj_t* actor)
 
     // spawn child
     mo = P_SpawnMobj(x, y, actor->z + (4*FRACUNIT), MT_PFLAME);
+    P_SetTarget(&mo->target, actor->target);
 
     t = P_Random();
     mo->momx += ((t & 7) - (P_Random() & 7)) << FRACBITS;
@@ -2902,6 +3219,41 @@ void A_BurnSpread(mobj_t* actor)
     mo->momz -= FRACUNIT;
     mo->flags |= MF_DROPPED;
     mo->reactiontime = (P_Random() & 3) + 2;
+}
+
+//
+// P_CalmRebels
+//
+// haleyjd 20141115: [SVE] Calm down the rebels on MAP10 after you murder their
+// boss and they all just naturally accept that he was completely out of his
+// gourd without any questions or courts martial or tribunals, even if they
+// didn't see the giant nasty spectre monster come out of his body.
+//
+static void P_CalmRebels(void)
+{
+    int i;
+    thinker_t *th;
+
+    // clear all sound targets
+    for(i = 0; i < numsectors; i++)
+        P_SetTarget(&sectors[i].soundtarget, NULL);
+
+    // put all rebels back to being idle.
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t *)th;
+
+            if(mo->health > 0 &&
+               mo->type >= MT_REBEL1 && mo->type <= MT_REBEL6)
+            {
+                P_SetTarget(&mo->target, NULL);
+                P_SetMobjState(mo, mo->info->spawnstate);
+                mo->flags &= ~MF_NODIALOG;
+            }
+        }
+    }
 }
 
 //
@@ -3011,6 +3363,16 @@ void A_BossDeath (mobj_t* actor)
                 // We wield the complete sigil, blahblah
                 GiveVoiceObjective("VOC85", "LOG85", 0);
             }
+            else if(!classicmode) 
+            {
+                // haleyjd 20140828: [SVE] open door 224 now if Macil is dead
+                P_GiveItemToPlayer(&players[0], SPR_TOKN, MT_TOKEN_PRISON_PASS);
+
+                // "No death, eternal life, and more, MUCH more! This, my task:
+                //  Cyborgs, half flesh, half steel, all to serve the One God.
+                //  You do not serve? You die!" --The Loremaster
+                GiveVoiceObjective("VOC122", "LOG122", 0);
+            }
         }
         else
         {
@@ -3018,7 +3380,7 @@ void A_BossDeath (mobj_t* actor)
             GiveVoiceObjective("VOC87", "LOG87", 0);
         }
         junk.tag = 222;         // Open the exit door again;
-        EV_DoDoor(&junk, vld_open); // Note this is NOT the Loremaster door...
+        EV_DoDoor(&junk, dr_open); // Note this is NOT the Loremaster door...
         break;
 
     case MT_SPECTRE_D:
@@ -3027,6 +3389,8 @@ void A_BossDeath (mobj_t* actor)
             GiveVoiceObjective("VOC106", "LOG106", 0);
         else
             GiveVoiceObjective("VOC79", "LOG79", 0);
+        if(!classicmode && gamemap == 10)
+            P_CalmRebels(); // [SVE]: calm down the rebels.
         break;
 
     case MT_SPECTRE_E:
@@ -3050,13 +3414,16 @@ void A_BossDeath (mobj_t* actor)
 
     case MT_PROGRAMMER:
         F_StartFinale();
-        G_ExitLevel(0);
+        // haleyjd 20140816: [SVE] no zombie exits
+        if(classicmode || players[0].health >= 0)
+            G_ExitLevel(0);
         break;
 
     default:
+        // haleyjd 20140816: [SVE] remove
         // Real classy, Rogue.
-        if(actor->type)
-            I_Error("Error: Unconnected BossDeath id %d", actor->type);
+        //if(actor->type)
+        //    I_Error("Error: Unconnected BossDeath id %d", actor->type);
         break;
     }
 }
@@ -3159,12 +3526,11 @@ void A_TeleportBeacon(mobj_t* actor)
     fixed_t fog_y;
 
     if(actor->target != players[actor->miscdata].mo)
-        actor->target = players[actor->miscdata].mo;
+        P_SetTarget(&actor->target, players[actor->miscdata].mo);
 
     mobj = P_SpawnMobj(actor->x, actor->y, ONFLOORZ, MT_REBEL1);
 
-    // haleyjd 20141024: missing code from disassembly; transfer allegiance
-    // originally from master player to the rebel.
+    // haleyjd 20141024: missing code from disassembly
     mobj->miscdata = actor->miscdata;
 
     if(!P_TryMove(mobj, mobj->x, mobj->y))
@@ -3174,29 +3540,48 @@ void A_TeleportBeacon(mobj_t* actor)
         return;
     }
 
-    // beacon no longer solid
-    actor->flags &= ~MF_SOLID;
+    // beacon no longer special
+    actor->flags &= ~MF_SPECIAL;
 
     // set color and flags
-    mobj->flags |= ((actor->miscdata << MF_TRANSSHIFT) | MF_NODIALOG);
-    mobj->target = NULL;
+    // [SVE]: determine by source player allegiance in CTC mode
+    if(capturethechalice)
+    {
+        if(players[actor->miscdata].allegiance == CTC_TEAM_BLUE)
+            mobj->flags |= ((7 << MF_TRANSSHIFT) | MF_NODIALOG);
+        else
+            mobj->flags |= ((1 << MF_TRANSSHIFT) | MF_NODIALOG);
+    }
+    else
+        mobj->flags |= ((actor->miscdata << MF_TRANSSHIFT) | MF_NODIALOG);
+
+    P_SetTarget(&mobj->target, NULL);
 
     // double Rebel's health in deathmatch mode
     if(deathmatch)
         mobj->health <<= 1;
 
-    if(actor->target)
+    // haleyjd 20141027: [SVE] various improvements:
+    // * Don't use this code in deathmatch. Just spawn them and let them find 
+    //   their own targets via code in p_enemy.c
+    // * Outside of classicmode, fix various problems here as well - don't try
+    //   to target dead or unshootable enemies.
+    if(!deathmatch)
     {
-        mobj_t* targ = actor->target->target;
-
-        if(targ)
+        if(actor->target)
         {
-            if(targ->type != MT_REBEL1 || targ->miscdata != mobj->miscdata)
-                mobj->target = targ;
-        }
-    }
+            mobj_t* targ = actor->target->target;
 
-    P_SetMobjState(mobj, mobj->info->seestate);
+            if(targ &&
+               (classicmode || (targ->health > 0 && targ->flags & MF_SHOOTABLE)))
+            {
+                if(targ->type != MT_REBEL1 || targ->miscdata != mobj->miscdata)
+                    P_SetTarget(&mobj->target, targ);
+            }
+        }
+
+        P_SetMobjState(mobj, mobj->info->seestate);
+    }
     mobj->angle = actor->angle;
 
     fog_x = mobj->x + FixedMul(20*FRACUNIT, finecosine[actor->angle>>ANGLETOFINESHIFT]);
@@ -3221,21 +3606,39 @@ void A_BodyParts(mobj_t* actor)
     mobjtype_t type;
     mobj_t* mo;
     angle_t an;
+    int numchunks = (classicmode || !d_maxgore) ? 1 : 4;
 
     if(actor->flags & MF_NOBLOOD) // Robots are flagged NOBLOOD
         type = MT_JUNK;
     else
         type = MT_MEAT;
 
-    mo = P_SpawnMobj(actor->x, actor->y, actor->z + (24*FRACUNIT), type);
-    P_SetMobjState(mo, mo->info->spawnstate + (P_Random() % 19));
+    // haleyjd 20140907: [SVE] max gore - ludicrous gibs
+    do
+    {
+        mo = P_SpawnMobj(actor->x, actor->y, actor->z + (24*FRACUNIT), type);
+        P_SetMobjState(mo, mo->info->spawnstate + (P_Random() % 19));
 
-    an = (P_Random() << 13) / 255;
-    mo->angle = an << ANGLETOFINESHIFT;
+        an = (P_Random() << 13) / 255;
+        mo->angle = an << ANGLETOFINESHIFT;
 
-    mo->momx = FixedMul(finecosine[an], (P_Random() & 0x0f) << FRACBITS);
-    mo->momy = FixedMul(finesine[an], (P_Random() & 0x0f) << FRACBITS);
-    mo->momz = (P_Random() & 0x0f) << FRACBITS;
+        mo->momx = FixedMul(finecosine[an], (P_Random() & 0x0f) << FRACBITS);
+        mo->momy = FixedMul(finesine[an], (P_Random() & 0x0f) << FRACBITS);
+        mo->momz = (P_Random() & 0x0f) << FRACBITS;
+
+        // [SVE] svillarreal - even more ludicrous gore
+        if(d_maxgore && !(actor->flags & MF_NOBLOOD))
+        {
+            mobj_t *gore = P_SpawnMobj(actor->x, actor->y, actor->z + (32*FRACUNIT), MT_BLOOD_GORE);
+
+            gore->angle = mo->angle;
+
+            gore->momx = mo->momx;
+            gore->momy = mo->momy;
+            gore->momz = mo->momz;
+        }
+    }
+    while(--numchunks > 0);
 }
 
 //
@@ -3246,11 +3649,15 @@ void A_BodyParts(mobj_t* actor)
 //
 void A_ClaxonBlare(mobj_t* actor)
 {
+    // [SVE]: no alarms in non-classicmode nomonsters deathmatch games
+    if(deathmatch && nomonsters && !classicmode)
+        return;
+
     // Timer ran down?
     if(--actor->reactiontime < 0)
     {
         // reset to initial state
-        actor->target = NULL;
+        P_SetTarget(&actor->target, NULL);
         actor->reactiontime = actor->info->reactiontime;
 
         // listen for more noise
@@ -3268,9 +3675,14 @@ void A_ClaxonBlare(mobj_t* actor)
     // retrigger the alarm.
     // Also, play the harsh, grating claxon.
     if(actor->reactiontime == 2)
-        actor->subsector->sector->soundtarget = NULL;
+        P_SetTarget(&actor->subsector->sector->soundtarget, NULL);
     else if(actor->reactiontime > 50)
+    {
         S_StartSound(actor, sfx_alarm);
+
+        // [SVE] svillarreal - hack to track if the alarm has ever went off
+        actor->lastlook = -1;
+    }
 }
 
 //
@@ -3283,7 +3695,20 @@ void A_ActiveSound(mobj_t* actor)
 {
     if(actor->info->activesound)
     {
-        if(!(leveltime & 7)) // haleyjd: added parens
+        int offset = 0;
+
+        // haleyjd 20140831: [SVE] Fix some ambient sounds to play
+        // consistently (all the various water effects)
+        if(!classicmode &&
+           (actor->type == MT_TREE7   || // log in water
+            actor->type == MT_MISC_03 || // water drip
+            actor->type == MT_MISC_07 || // water fountain
+            actor->type == MT_MISC_13))  // water splash
+        {
+            offset = leveltime % actor->tics;
+        }
+
+        if(!((leveltime - offset) & 7)) // haleyjd: added parens
             S_StartSound(actor, actor->info->activesound);
     }
 }
@@ -3298,7 +3723,7 @@ void A_ActiveSound(mobj_t* actor)
 //
 void A_ClearSoundTarget(mobj_t* actor)
 {
-    actor->subsector->sector->soundtarget = NULL;
+    P_SetTarget(&actor->subsector->sector->soundtarget, NULL);
 }
 
 //
@@ -3367,4 +3792,229 @@ void A_ClearForceField(mobj_t* actor)
         sides[secline->sidenum[1]].midtexture = 0;
     }
 }
+
+//
+// A_OreSpawner
+//
+// [SVE] svillarreal
+//
+
+void A_OreSpawner(mobj_t *actor)
+{
+    thinker_t *th;
+    boolean inrange;
+    int i;
+    int numores = 0;
+    
+    if(deathmatch || classicmode)
+        return;
+
+    inrange = false;
+
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        if(!playeringame[i])
+            continue;
+
+        if(P_AproxDistance(players[i].mo->x - actor->x,
+                           players[i].mo->y - actor->y) <= (2048*FRACUNIT))
+        {
+            inrange = true;
+            break;
+        }
+    }
+
+    if(!inrange)
+        return;
+
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t*)th;
+
+            if(mo->type == MT_DEGNINORE)
+                numores++;
+        }
+    }
+
+    if(numores >= 3)
+        return;
+
+    P_SpawnMobj(actor->x, actor->y, actor->z, MT_DEGNINORE);
+}
+
+//
+// A_CheckPlayerDone
+//
+// haleyjd 20141116: [SVE] Don't allow player corpses to be freed until the
+// player has respawned.
+//
+void A_CheckPlayerDone(mobj_t *actor)
+{
+    if(!actor->player)
+        P_SetMobjState(actor, S_RGIB_16);
+}
+
+//=============================================================================
+//
+// Capture the Chalice
+//
+// haleyjd 20140920: [SVE] Completing this mythical game mode mentioned in the
+// README file for the game's original releases for Veteran Edition was one of 
+// my top priorities aside from cleaning up and stabilizing the game engine, 
+// and helping Kaiser work on making it look fabulous with the new lighting.
+//
+// This is half the battle. See p_inter.c in the vicinity of the function
+// P_TouchSpecialThing for what happens when you pick up a chalice or reach
+// your flag stand while carrying the other team's chalice.
+// 
+// We need to implement the flag stands here.
+//
+
+static void P_spawnChalice(mobj_t *actor, mobjtype_t chaliceType)
+{
+    fixed_t x = actor->x + 16 * finecosine[actor->angle >> ANGLETOFINESHIFT];
+    fixed_t y = actor->y + 16 * finesine[actor->angle >> ANGLETOFINESHIFT];
+
+    P_SpawnMobj(x, y, ONFLOORZ, chaliceType);
+}
+
+//
+// A_FlagStandSpawn
+//
+// Spawn the proper type of chalice for the flag stand at level start.
+//
+void A_FlagStandSpawn(mobj_t *actor)
+{
+    mobjtype_t type = NUMMOBJTYPES;
+
+    if(actor->type == MT_CTC_FLAGSPOT_RED)
+        type = MT_INV_CHALICE;
+    else if(actor->type == MT_CTC_FLAGSPOT_BLUE)
+        type = MT_INV_BLUE_CHALICE;
+    else
+        return; // eh??
+
+    P_spawnChalice(actor, type);
+}
+
+static char ctcmsgbuf[80];
+
+//
+// A_FlagStandCheck
+//
+// After spawning, the flag stands go into a cycling state. Since they are
+// marked as MF_SPECIAL, victory checks are done when a player touches them
+// rather than here. Here, we check to make sure that the flags have not gone
+// AWOL.
+//
+void A_FlagStandCheck(mobj_t *actor)
+{
+    int i;
+    mobjtype_t type = NUMMOBJTYPES;
+    thinker_t *th;
+
+    if(actor->type == MT_CTC_FLAGSPOT_RED)
+        type = MT_INV_CHALICE;
+    else if(actor->type == MT_CTC_FLAGSPOT_BLUE)
+        type = MT_INV_BLUE_CHALICE;
+    else
+        return; // eh??
+
+    // count down reactiontime if positive
+    if(actor->reactiontime > 0)
+        --actor->reactiontime;
+
+    // check for the flag in players' inventories
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        int j;
+        if(!playeringame[i])
+            continue;
+        for(j = 0; j < NUMINVENTORY; j++)
+        {
+            if(players[i].inventory[j].type == type &&
+               players[i].inventory[j].amount >= 1)
+            {
+                actor->reactiontime = 0;
+                actor->flags &= ~MF_JUSTATTACKED; // disarm
+                return; // somebody's carrying it.
+            }
+        }
+    }
+
+    // ok nobody seems to be carrying the flag around, so, has it flopped out
+    // onto the ground somewhere?
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t*)th;
+            if(mo->type == type)
+            {
+                fixed_t dist = P_AproxDistance(mo->x - actor->x, mo->y - actor->y);
+                if(actor->flags & MF_JUSTATTACKED)
+                {
+                    if(dist > 64*FRACUNIT)
+                    {
+                        // we've been waiting for 30 seconds and the flag is still
+                        // on the ground. It might be stuck somewhere, or have fallen
+                        // out of the level somehow, so warp it back to base.
+                        fixed_t oldx = mo->x;
+                        fixed_t oldy = mo->y;
+                        fixed_t oldz = mo->z;
+                        fixed_t x = actor->x + 16 * finecosine[actor->angle >> ANGLETOFINESHIFT];
+                        fixed_t y = actor->y + 16 * finesine[actor->angle >> ANGLETOFINESHIFT];
+
+                        if(actor->reactiontime > 0) // not yet.
+                            return;
+
+                        if(P_TeleportMove(mo, x, y))
+                        {
+                            mobj_t *fog;
+                            fog = P_SpawnMobj(oldx, oldy, oldz, MT_TFOG);
+                            S_StartSound(fog, sfx_telept);
+                            fog = P_SpawnMobj(mo->x, mo->y, mo->z, MT_TFOG);
+                            S_StartSound(fog, sfx_telept);
+                            actor->flags &= ~MF_JUSTATTACKED; // disarm
+                            M_snprintf(ctcmsgbuf, sizeof(ctcmsgbuf),
+                                "%s chalice returned to base!",
+                                mo->type == MT_INV_BLUE_CHALICE ? "Blue" : "Red");
+                            P_MessageAllPlayers(ctcmsgbuf, sfx_radio);
+                        }
+                    }
+                    else
+                    {
+                        // flag is back in position
+                        actor->reactiontime = 0;
+                        actor->flags &= ~MF_JUSTATTACKED; // disarm
+                    }
+                }
+                else if(!(actor->flags & MF_JUSTATTACKED) && dist > 64*FRACUNIT)
+                {
+                    // flag is resting, but not at base
+                    // set us to 30 seconds' worth of waiting and set MF_JUSTATTACKED to
+                    // indicate that we're going to warp the flag back to base unless it
+                    // starts moving soon.
+                    actor->reactiontime = 30 * TICRATE;
+                    actor->flags |= MF_JUSTATTACKED;
+                }
+                else
+                {
+                    // flag is at base
+                    actor->reactiontime = 0;
+                    actor->flags &= ~MF_JUSTATTACKED; // disarm
+                }
+
+                return; // we are done scanning.
+            }
+        }
+    }
+
+    // we didn't find our flag; respawn it.
+    P_spawnChalice(actor, type);
+}
+
+// EOF
 

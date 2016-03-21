@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -51,20 +52,13 @@
 #include "hu_stuff.h"
 #include "p_dialog.h"
 
+// [SVE] svillarreal
+#include "rb_sky.h"
 
-//
-// Animating textures and planes
-// There is another anim_t used in wi_stuff, unrelated.
-//
-typedef struct
-{
-    boolean	istexture;
-    int		picnum;
-    int		basepic;
-    int		numpics;
-    int		speed;
-    
-} anim_t;
+// [SVE] svillarreal
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
 
 //
 //      source animation definition
@@ -76,10 +70,6 @@ typedef struct
     char	startname[9];
     int		speed;
 } animdef_t;
-
-
-// haleyjd 08/30/10: [STRIFE] MAXANIMS raised from 32 to 40
-#define MAXANIMS                40
 
 //
 // P_InitPicAnims
@@ -648,7 +638,7 @@ P_CrossSpecialLine
         // fall-through:
     case 2:
         // Open Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_open);
+        EV_DoDoor(line,dr_open);
         line->special = 0;
         break;
 
@@ -662,13 +652,13 @@ P_CrossSpecialLine
         // fall-through:
     case 3:
         // Close Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_close);
+        EV_DoDoor(line,dr_close);
         line->special = 0;
         break;
 
     case 4:
         // Raise Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_normal);
+        EV_DoDoor(line,dr_normal);
         line->special = 0;
         break;
 
@@ -710,7 +700,7 @@ P_CrossSpecialLine
 
     case 16:
         // Close Door 30 - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_close30ThenOpen);
+        EV_DoDoor(line,dr_close30ThenOpen);
         line->special = 0;
         break;
 
@@ -800,7 +790,9 @@ P_CrossSpecialLine
 
     case 52:
         // EXIT! - haleyjd 09/21/10: [STRIFE] Exit to level tag/100
-        G_ExitLevel (line->tag / 100);
+        // haleyjd 20140816: [SVE] no zombie exits
+        if(classicmode || (thing->player && thing->player->health >= 0))
+            G_ExitLevel(line->tag / 100);
         break;
 
     case 53:
@@ -848,13 +840,13 @@ P_CrossSpecialLine
 
     case 108:
         // Blazing Door Raise (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeRaise);
+        EV_DoDoor (line,dr_blazeRaise);
         line->special = 0;
         break;
 
     case 109:
         // Blazing Door Open (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeOpen);
+        EV_DoDoor (line,dr_blazeOpen);
         line->special = 0;
         break;
 
@@ -871,7 +863,7 @@ P_CrossSpecialLine
         // fall-through:
     case 110:
         // Blazing Door Close (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeClose);
+        EV_DoDoor (line,dr_blazeClose);
         line->special = 0;
         break;
 
@@ -918,13 +910,13 @@ P_CrossSpecialLine
 
     case 174:
         // villsa [STRIFE] Split Open
-        EV_DoDoor(line, vld_splitOpen);
+        EV_DoDoor(line, dr_splitOpen);
         line->special = 0;
         break;
 
     case 183:
         // villsa [STRIFE] Split Raise Nearest
-        EV_DoDoor(line, vld_splitRaiseNearest);
+        EV_DoDoor(line, dr_splitRaiseNearest);
         line->special = 0;
         break;
 
@@ -967,7 +959,7 @@ P_CrossSpecialLine
         // Destroyed)
         if(!(thing->player->questflags & QF_QUEST16))
             break;
-        EV_DoDoor(line, vld_open);
+        EV_DoDoor(line, dr_open);
         line->special = 0;
         break;
 
@@ -984,7 +976,7 @@ P_CrossSpecialLine
         // haleyjd 09/21/10: [STRIFE] W1 Open Door if Sigil Owned
         if(!(thing->player->weaponowned[wp_sigil]))
             break;
-        EV_DoDoor(line, vld_open);
+        EV_DoDoor(line, dr_open);
         line->special = 0;
         break;
 
@@ -1008,8 +1000,12 @@ P_CrossSpecialLine
         I_StartVoice(crosslinestr);
 
         // load objective
-        DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag);
-        GiveObjective(crosslinestr, 0);
+        // [SVE]: Don't load the demo level logs unless we're playing the demo levels
+        if(gamemap >= 32 || !(line->tag >= 5 && line->tag <= 9))
+        {
+            DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag);
+            GiveObjective(crosslinestr, 0);
+        }
 
         // Put up a message
         thing->player->message = DEH_String("Incoming Message...");
@@ -1036,8 +1032,12 @@ P_CrossSpecialLine
         I_StartVoice(crosslinestr);
 
         // load objective
-        DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag);
-        GiveObjective(crosslinestr, 0);
+        // [SVE]: Don't load the demo level logs unless we're playing the demo levels
+        if(gamemap >= 32 || !(line->tag >= 5 && line->tag <= 9))
+        {
+            DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag);
+            GiveObjective(crosslinestr, 0);
+        }
 
         // Put up a message
         thing->player->message = DEH_String("Incoming Message from BlackBird...");
@@ -1059,6 +1059,15 @@ P_CrossSpecialLine
         if(thing->player != &players[0])
             break;
 
+        // [SVE] svillarreal - stealth achievement
+#ifdef _USE_STEAM_
+        if(line->tag == 2313 && gamemap == 4)
+        {
+            if(!P_CheckPlayersCheating(ACH_ALLOW_SP) && !P_ClaxonsActive())
+                I_SteamSetAchievement("SVE_ACH_STEALTH");
+        }
+#endif
+
         // must have comm unit
         if(!(thing->player->powers[pw_communicator]))
             break;
@@ -1075,8 +1084,12 @@ P_CrossSpecialLine
         I_StartVoice(crosslinestr);
 
         // give objective
-        DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag/100);
-        GiveObjective(crosslinestr, 0);
+        // [SVE]: Don't load the demo level logs unless we're playing the demo levels
+        if(gamemap >= 32 || !(line->tag/100 >= 5 && line->tag/100 <= 9))
+        {
+            DEH_snprintf(crosslinestr, sizeof(crosslinestr), "log%i", line->tag/100);
+            GiveObjective(crosslinestr, 0);
+        }
 
         // Put up a message
         thing->player->message = DEH_String("Incoming Message from BlackBird...");
@@ -1124,12 +1137,12 @@ P_CrossSpecialLine
 
     case 75:
         // Close Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_close);
+        EV_DoDoor(line,dr_close);
         break;
 
     case 76:
         // Close Door 30 - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_close30ThenOpen);
+        EV_DoDoor(line,dr_close30ThenOpen);
         break;
 
     case 77:
@@ -1169,7 +1182,7 @@ P_CrossSpecialLine
 
     case 86:
         // Open Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_open);
+        EV_DoDoor(line,dr_open);
         break;
 
     case 87:
@@ -1197,7 +1210,7 @@ P_CrossSpecialLine
         // fall-through:
     case 90: 
         // Raise Door - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_normal);
+        EV_DoDoor(line,dr_normal);
         break;
 
     case 91:
@@ -1246,17 +1259,17 @@ P_CrossSpecialLine
 
     case 105:
         // Blazing Door Raise (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeRaise);
+        EV_DoDoor (line,dr_blazeRaise);
         break;
 
     case 106:
         // Blazing Door Open (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeOpen);
+        EV_DoDoor (line,dr_blazeOpen);
         break;
 
     case 107:
         // Blazing Door Close (faster than TURBO!) - [STRIFE] Verified unmodified.
-        EV_DoDoor (line,vld_blazeClose);
+        EV_DoDoor (line,dr_blazeClose);
         break;
 
     case 120:
@@ -1292,6 +1305,7 @@ P_CrossSpecialLine
         {
             int map  = line->tag / 100;
             int spot = line->tag % 100;
+            const char *mapname;
 
             if(thing->player->weaponowned[wp_sigil])
             {
@@ -1301,23 +1315,52 @@ P_CrossSpecialLine
                     map = 10;
             }
 
+            // [SVE]: rangecheck, to allow maps >= # of built-in maps
+            if(map - 1 < HU_NUMMAPNAMES)
+                mapname = DEH_String(mapnames[map - 1]) + 8;
+            else
+                mapname = DEH_String(" New Area");
+
             DEH_snprintf(crosslinestr, sizeof(crosslinestr), 
-                         "Entering%s", 
-                         DEH_String(mapnames[map - 1]) + 8);
+                         "Entering%s", mapname);
             thing->player->message = crosslinestr;
 
             if(netgame && deathmatch)
             {
+                int secnum = -1;
+                boolean raiseFloor = true;
+
                 if(levelTimer && levelTimeCount != 0)
                 {
+                    int minutes;
+                    int seconds;
+
+                    // [SVE]: enhanced output
+                    minutes = ((levelTimeCount/TICRATE) / 60) % 60;
+                    seconds = (levelTimeCount/TICRATE) % 60;
+
                     DEH_snprintf(crosslinestr, sizeof(crosslinestr), 
-                                 "%d min left", 
-                                 (levelTimeCount/TICRATE)/60);
+                                 "%02d:%02d time left", 
+                                 minutes, seconds);
                     break;
                 }
 
                 // raise switch from floor
-                EV_DoFloor(line, raiseFloor64);
+                
+                // [SVE]: only do once.
+                while((secnum = P_FindSectorFromLineTag(line, secnum)) >= 0)
+                {
+                    sector_t *sec = &sectors[secnum];
+
+                    if(P_FindLowestFloorSurrounding(sec) != sec->floorheight)
+                    {
+                        raiseFloor = false;
+                        break;
+                    }
+                }
+
+                if(classicmode || raiseFloor)
+                    EV_DoFloor(line, raiseFloor64);
             }
             else
             {
@@ -1438,7 +1481,7 @@ P_ShootSpecialLine
 
     case 46:
         // OPEN DOOR - [STRIFE] Verified unmodified.
-        EV_DoDoor(line,vld_open);
+        EV_DoDoor(line,dr_open);
         P_ChangeSwitchTexture(line,1);
         break;
 
@@ -1509,10 +1552,29 @@ void P_PlayerInSpecialSector (player_t* player)
 
     case 9:
         // SECRET SECTOR
-        //player->secretcount++; [STRIFE] Don't have a secret count.
         sector->special = 0;
         if(player - players == consoleplayer)
+        {
+            if(!classicmode) // [SVE]
+            {
+                player->message = "You found a secret area!";
+                message_dontfuckwithme = true;
+            }
             S_StartSound(NULL, sfx_yeah);
+
+#ifdef _USE_STEAM_
+            // [SVE] svillarreal - tally secrets found
+            if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+            {
+                if(!I_SteamHasAchievement("SVE_ACH_COMPLETIONIST"))
+                {
+                    I_SteamSetAchievementProgress("SVE_ACH_COMPLETIONIST", ++player->secretcount, 16);
+                    if(player->secretcount >= 16)
+                        I_SteamSetAchievement("SVE_ACH_COMPLETIONIST");
+                }
+            }
+#endif
+        }
         break;
 
     case 11:
@@ -1550,11 +1612,9 @@ void P_PlayerInSpecialSector (player_t* player)
         break;
 
     default:
-        I_Error ("P_PlayerInSpecialSector: "
-                 "unknown special %i",
-                 sector->special);
+        // haleyjd 20140816: [SVE] stability
         break;
-    };
+    }
 }
 
 
@@ -1576,6 +1636,12 @@ void P_UpdateSpecials (void)
     int         i;
     line_t*     line;
 
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_CloudTicker();
+    }
+
 
     //  LEVEL TIMER
     if (levelTimer == true)
@@ -1583,11 +1649,10 @@ void P_UpdateSpecials (void)
         if(levelTimeCount) // [STRIFE] Does not allow to go negative
             levelTimeCount--;
         
-        /*
         // [STRIFE] Not done here. Exit lines check this manually instead.
-        if (!levelTimeCount)
+        // [SVE]: restored as is expected behavior.
+        if(!levelTimeCount)
             G_ExitLevel(0);
-        */
     }
 
     //  ANIMATE FLATS AND TEXTURES GLOBALLY
@@ -1974,13 +2039,13 @@ void P_SpawnSpecials (void)
     }
 
     //	Init other misc stuff
-    for (i = 0;i < MAXCEILINGS;i++)
+    for(i = 0; i < numactiveceilings; i++)
         activeceilings[i] = NULL;
 
-    for (i = 0;i < MAXPLATS;i++)
+    for(i = 0; i < numactiveplats; i++)
         activeplats[i] = NULL;
 
-    for (i = 0;i < MAXBUTTONS;i++)
+    for(i = 0; i < MAXBUTTONS; i++)
         memset(&buttonlist[i],0,sizeof(button_t));
 
     // villsa [STRIFE]
