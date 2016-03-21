@@ -820,6 +820,10 @@ void R_FillBackScreen (void)
 
     char *name;
 
+    // [SVE]: strictly not supported under the 3D renderer
+    if(use3drenderer)
+        return;
+
     // If we are running full screen, there is no need to do any of this,
     // and the background buffer can be freed if it was previously in use.
 

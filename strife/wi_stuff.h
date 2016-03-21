@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -19,33 +20,18 @@
 #ifndef __WI_STUFF__
 #define __WI_STUFF__
 
-// haleyjd 08/23/2010: Strife does not have an intermission
-#if 0
-//#include "v_video.h"
-
-#include "doomdef.h"
-
-// States for the intermission
-
-typedef enum
-{
-    NoState = -1,
-    StatCount,
-    ShowNextLoc,
-} stateenum_t;
+// Calculate number of players playing
+int WI_NumPlayers(void);
+int WI_PlayersOnTeam(int team);
 
 // Called by main loop, animate the intermission.
-void WI_Ticker (void);
+void WI_Ticker(void);
 
 // Called by main loop,
 // draws the intermission directly into the screen buffer.
-void WI_Drawer (void);
+void WI_Drawer(void);
 
 // Setup for an intermission screen.
-void WI_Start(wbstartstruct_t*	 wbstartstruct);
+void WI_Start(wbstartstruct_t *wbstartstruct);
 
-// Shut down the intermission screen
-void WI_End(void);
-
-#endif
 #endif

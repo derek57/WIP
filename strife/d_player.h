@@ -73,7 +73,16 @@ typedef enum
     CF_ONFIRE           = 8,
     // villsa [STRIFE] new cheat
     // auto-use medkits
-    CF_AUTOHEALTH       = 16
+    CF_AUTOHEALTH       = 16,
+    // haleyjd [SVE] 20140914
+    // disable achievements if player is cheating or loading mods
+    CF_CHEATING         = 32,
+    // haleyjd [SVE] 20140917
+    // firing the torpedo weapon
+    CF_TORPEDO          = 64,
+    // haleyjd [SVE] 20141011
+    // player has found all three talismans
+    CF_TALISMANPOWER    = 128,
 
 } cheat_t;
 
@@ -107,9 +116,16 @@ typedef struct player_s
     // Base height above floor for viewz.
     fixed_t		viewheight;
     // Bob/squat speed.
-    fixed_t         	deltaviewheight;
+    fixed_t     deltaviewheight;
     // bounded/scaled total momentum.
-    fixed_t         	bob;	
+    fixed_t     bob;
+
+    // [SVE] svillarreal - recoil
+    fixed_t     recoilpitch;
+
+    // haleyjd 20140902: [SVE] interpolation data
+    fixed_t     prevviewz;
+    fixed_t     prevpitch;
 
     // This is only used between levels,
     // mo->health is used during levels.
@@ -126,7 +142,7 @@ typedef struct player_s
     int			nukagecount;             // Nukage exposure counter
     int			questflags;              // Quest bit flags
     int			pitch;                   // Up/down look angle
-    boolean		centerview;              // True if view should be centered
+    int         centerview;              // True if view should be centered
     inventory_t		inventory[NUMINVENTORY]; // Player inventory items
     boolean		st_update;               // If true, update status bar
     short		numinventory;            // Num. active inventory items
@@ -163,7 +179,7 @@ typedef struct player_s
      // For intermission stats.
     short		killcount;    // [STRIFE] Changed to short
     //int		itemcount;    // [STRIFE] Eliminated these.
-    //int		secretcount;
+    int         secretcount;  // [SVE] svillarreal
 
     // Hint messages.
     char*		message;	
@@ -200,49 +216,15 @@ typedef struct player_s
 
 } player_t;
 
-
-//
-// INTERMISSION
-// Structure passed e.g. to WI_Start(wb)
-//
-typedef struct
-{
-    boolean	in;	// whether the player is in game
-    
-    // Player stats, kills, collected items etc.
-    int		skills;
-    int		sitems;
-    int		ssecret;
-    int		stime; 
-    int		frags[4];
-    int		score;	// current score on entry, modified on return
-  
-} wbplayerstruct_t;
+// [SVE]: CTC team assignment
+void P_AssignPlayerToTeam(player_t *player);
 
 typedef struct
 {
-    int		epsd;	// episode # (0-2)
-
-    // if true, splash the secret level
-    boolean	didsecret;
-    
-    // previous and next levels, origin 0
-    int		last;
-    int		next;	
-    
-    int		maxkills;
-    int		maxitems;
-    int		maxsecret;
-    int		maxfrags;
-
-    // the par time
-    int		partime;
-    
-    // index of this player in game
-    int		pnum;	
-
-    wbplayerstruct_t	plyr[MAXPLAYERS];
-
+    int next;       // next level
+    int numplayers; // number of players that were playing when exited
+    int numblue;    // number of blue players
+    int numred;     // number of red players
 } wbstartstruct_t;
 
 

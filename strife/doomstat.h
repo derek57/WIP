@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -48,6 +49,9 @@ extern  boolean	respawnparm;	// checkparm of -respawn
 extern  boolean	fastparm;	// checkparm of -fast
 extern  boolean randomparm;     // [STRIFE] checkparm of -random
 extern  boolean flipparm;       // [STRIFE] checkparm of -flip
+
+extern  boolean start_fastparm;
+extern  boolean start_respawnparm;
 
 extern  boolean	devparm;	// DEBUG: launched with -devparm
 
@@ -181,7 +185,9 @@ extern  boolean	usergame;
 //?
 extern  boolean	demoplayback;
 extern  boolean	demorecording;
-extern  int     mouse_fire_countdown;   // villsa [STRIFE]
+
+// haleyjd 20140817: [SVE] remove gross mouse hack
+//extern  int     mouse_fire_countdown;   // villsa [STRIFE]
 
 // Round angleturn in ticcmds to the nearest 256.  This is used when
 // recording Vanilla demos in netgames.
@@ -217,9 +223,11 @@ extern  boolean		playeringame[MAXPLAYERS];
 
 
 // Player spawn spots for deathmatch.
+// haleyjd 20140819: [SVE] rem dmspots limit
 #define MAX_DM_STARTS   10
-extern  mapthing_t      deathmatchstarts[MAX_DM_STARTS];
-extern  mapthing_t*	deathmatch_p;
+extern  mapthing_t *deathmatchstarts;
+extern  int         numdeathmatchstarts;
+extern  int         numdmstartsalloc;
 
 // Player spawn spots.
 extern  mapthing_t      playerstarts[MAXPLAYERS];
@@ -228,9 +236,15 @@ extern  mapthing_t      playerstarts[MAXPLAYERS];
 #define MAXRIFTSPOTS 16
 extern  mapthing_t      riftSpots[MAXRIFTSPOTS];
 
+// [SVE]
+extern boolean          riftSpotInit[MAXRIFTSPOTS];
+
 // Intermission stats.
 // Parameters for world map / intermission.
 extern  wbstartstruct_t		wminfo;	
+
+// [SVE] svillarreal
+extern boolean      mapwithspecialtags;
 
 
 
@@ -253,7 +267,8 @@ extern  boolean         precache;
 //  to force a wipe on the next draw
 extern  gamestate_t     wipegamestate;
 
-extern  int             mouseSensitivity;
+extern  int             mouseSensitivityX;
+extern  int             mouseSensitivityY;
 
 //extern  int             bodyqueslot; [STRIFE] unused
 
@@ -273,6 +288,55 @@ extern	int		rndindex;
 
 extern  ticcmd_t        *netcmds;
 
+// haleyjd: [SVE] New globals for Strife: Veteran Edition
+extern  boolean         classicmode;
 
+// [SVE] svillarreal
+extern  boolean         use3drenderer;
+extern  boolean         default_use3drenderer;
+extern  boolean         d_skipmovies;
+
+// [SVE] interpolation
+extern  boolean         d_interpolate;
+
+// [SVE] gore toggle
+extern  boolean         d_maxgore;
+
+// [SVE] recoil
+extern  boolean         d_recoil;
+
+// [SVE] damage indicator
+extern  boolean         d_dmgindictor;
+
+// [SVE] achievements disable
+extern  boolean         d_cheating;
+
+// [SVE] CTC mode
+extern  boolean         capturethechalice;
+extern  int             ctcpointlimit;
+extern  int             ctcbluescore;
+extern  int             ctcredscore;
+
+// [SVE] autorun
+extern  boolean         autorun;
+
+// [SVE] hud toggle
+extern  boolean         fullscreenhud;
+
+// [SVE] local user preferred CTC team
+enum
+{
+    PREF_TEAM_AUTO, // let game assign
+    PREF_TEAM_BLUE, // blue team
+    PREF_TEAM_RED,  // red team
+
+    PREF_TEAM_MAX
+};
+
+extern int ctcprefteam;
+extern int ctcprefteams[MAXPLAYERS];
+
+// [SVE]: autoaim toggle
+extern int autoaim;
 
 #endif

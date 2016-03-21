@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -20,8 +21,12 @@
 #ifndef __P_SETUP__
 #define __P_SETUP__
 
-
-
+extern mapthing_t *ctcbluestarts;
+extern mapthing_t *ctcredstarts;
+extern int         numctcbluestarts;
+extern int         numctcbluestartsalloc;
+extern int         numctcredstarts;
+extern int         numctcredstartsalloc;
 
 // NOT called by W_Ticker. Fixme.
 // [STRIFE] Removed episode parameter

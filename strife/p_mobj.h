@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -36,10 +37,20 @@
 // Needs precompiled tables/data structures.
 #include "info.h"
 
+// [SVE]: Capture the Chalice teams
+#define CTC_TEAM_BLUE 8
+#define CTC_TEAM_RED  9
 
-
-
-
+// haleyjd 20140902: [SVE]
+// prevpos_t represents an Mobj or camera's previous position for purposes of
+// frame interpolation in the renderer. - haleyjd 01/04/14
+typedef struct prevpos_s
+{
+   fixed_t x;
+   fixed_t y;
+   fixed_t z;
+   angle_t angle;
+} prevpos_t;
 
 //
 // NOTES: mobj_t
@@ -231,6 +242,21 @@ typedef enum
 
 } mobjflag_t;
 
+// [SVE] svillarreal - macro for getting the translation index
+#define MOBJTRANSLATION(mo) (((mo->flags & MF_TRANSLATION) >> (MF_TRANSSHIFT - 8)) >> 8)
+
+// haleyjd 20140818: [SVE] flags2 enumeration
+// [SVE] svillarreal - updated 20141109
+typedef enum
+{
+    MF2_NOSTONECOLD         = 0x00000001,   // not killed by STONECOLD cheat
+    MF2_DRAWBILLBOARD       = 0x00000002,   // render sprite as a billboard
+    MF2_DRAWOUTLINE         = 0x00000004,   // render outline around sprite
+    MF2_NOTHINGBLOCK        = 0x00000008,   // does not collide with other mobjs
+    MF2_MARKDECAL           = 0x00000010,   // leave a decal in some way
+    MF2_NOREBELATTACK       = 0x00000020,   // rebels shouldn't attack w/o provocation
+    MF2_IGNORENOMONSTERS    = 0x00000040    // will always spawn even if -nomonsters is set
+} mobjflag2_t;
 
 // Map Object definition.
 //
@@ -256,6 +282,9 @@ typedef struct mobj_s
     angle_t             angle;  // orientation
     spritenum_t         sprite; // used to find patch_t and flip value
     int                 frame;  // might be ORed with FF_FULLBRIGHT
+
+    // haleyjd 20140902: [SVE] interpolation data
+    prevpos_t           prevpos;
 
     // Interaction info, by BLOCKMAP.
     // Links in blocks (if needed).
@@ -326,5 +355,11 @@ typedef struct mobj_s
 
 // haleyjd [STRIFE] Exported
 void P_CheckMissileSpawn (mobj_t* th);
+
+// [SVE] interpolation
+void P_MobjBackupPosition(mobj_t *mo);
+
+// [SVE] referential integrity
+void P_SetTarget(mobj_t **mop, mobj_t *target);
 
 #endif

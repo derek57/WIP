@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -290,6 +291,13 @@ typedef enum
     SPR_STLE, // 260
     SPR_HUGE, // 261
     SPR_STLG, // 262
+
+    // [SVE]: New sprites
+    SPR_RELB,
+    SPR_FLGR,
+    SPR_FLGB,
+    SPR_FLGG,
+
     NUMSPRITES
 
 } spritenum_t;
@@ -1815,6 +1823,28 @@ typedef enum
     S_STLG_03,      // 1515
     S_STLG_04,      // 1516
     S_STLG_05,      // 1517
+
+    // [SVE]: New states
+    S_RELB_00,      // Blue Chalice
+    S_FLGR_00,      // Red Chalice Stand (CTC)
+    S_FLGR_01,
+    S_FLGR_02,
+    S_FLGB_00,      // Blue Chalice Stand (CTC)
+    S_FLGB_01,
+    S_FLGB_02,
+    S_FLGRARTI_00,  // Red Talisman
+    S_FLGGARTI_00,  // Green Talisman
+    S_FLGBARTI_00,  // Blue Talisman
+    S_RGIB_16,      // Safety state for dead players
+    S_SEWR_14,      // Extra death frame for Sentinel
+    S_SEWR_15,      // Extra death frame for Sentinel
+    S_SEWR_16,      // Extra death frame for Sentinel
+    S_SEWR_17,      // Extra death frame for Sentinel
+    S_PLAY_CORPSE,  // Extra frame for player corpse map object
+    S_PEAS_CORPSE,  // Extra frame for peasant corpse map object
+    S_AGRD_CORPSE,  // Extra frame for acolyte corpse map object
+    S_PLAY_20,
+
     NUMSTATES
 
 } statenum_t;
@@ -2181,6 +2211,17 @@ typedef enum
     MT_TOKEN_QUEST30,       //341
     MT_TOKEN_QUEST31,       //342
     MT_SLIDESHOW,       //343
+
+    // [SVE] svillarreal - new mobj types
+    MT_BLOOD_GORE,
+    MT_INV_BLUE_CHALICE,
+    MT_CTC_FLAGSPOT_BLUE,
+    MT_CTC_FLAGSPOT_RED,
+    MT_AZTECARTI_RED,
+    MT_AZTECARTI_GREEN,
+    MT_AZTECARTI_BLUE,
+    MT_TOKEN_DOOR4,
+    MT_ORE_SPAWNER,
     NUMMOBJTYPES
 
 } mobjtype_t;
@@ -2212,6 +2253,7 @@ typedef struct
     int     activesound;
     int     flags;
     char*   name;
+    int     flags2; // haleyjd 20140818: [SVE] flags2
 } mobjinfo_t;
 
 extern mobjinfo_t mobjinfo[NUMMOBJTYPES];

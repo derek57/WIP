@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -35,6 +36,10 @@
 
 #include "r_local.h"
 #include "r_sky.h"
+
+// [SVE] svillarreal
+#include "rb_data.h"
+#include "rb_view.h"
 
 
 
@@ -75,6 +80,8 @@ fixed_t			viewz;
 int                     viewpitch;  // villsa [STRIFE]
 
 angle_t			viewangle;
+
+fixed_t                 viewlerp; // haleyjd 20140902: [SVE]
 
 fixed_t			viewcos;
 fixed_t			viewsin;
@@ -693,7 +700,7 @@ void R_ExecuteSetViewSize (void)
     viewwidth = scaledviewwidth>>detailshift;
 	
     // villsa [STRIFE] calculate centery from player's pitch
-    centery = (setblocks*players[consoleplayer].pitch);
+    centery = (setblocks*(players[consoleplayer].pitch>>FRACBITS));
     centery = (unsigned int)(centery/10)+viewheight/2;
 
     centerx = viewwidth/2;
@@ -770,8 +777,6 @@ void R_ExecuteSetViewSize (void)
 // R_Init
 //
 
-
-
 void R_Init (void)
 {
     R_InitData ();
@@ -779,6 +784,9 @@ void R_Init (void)
         printf (".");
     else
         D_IntroTick(); // [STRIFE] tick intro
+
+    // [SVE] svillarreal - initialize resources for OpenGL
+    RB_InitData();
 
     R_InitPointToAngle ();
     if(devparm)
@@ -855,8 +863,19 @@ void R_SetupPitch(player_t* player)
 
     if(viewpitch != player->pitch)
     {
-        viewpitch   = player->pitch;
-        pitchfrac   = (setblocks * player->pitch) / 10;
+        viewpitch = R_LerpCoord(viewlerp, player->prevpitch, player->pitch);
+
+        // [SVE]: must clip here for software, in case displayplayer is a 
+        // hardware rendering node
+        if(!use3drenderer)
+        {
+            if(viewpitch > 90*FRACUNIT)
+                viewpitch = 90*FRACUNIT;
+            if(viewpitch < -110*FRACUNIT)
+                viewpitch = -110*FRACUNIT;
+        }
+        
+        pitchfrac   = (setblocks * (viewpitch>>FRACBITS)) / 10;
         centery     = pitchfrac + viewheight / 2;
         centeryfrac = centery << FRACBITS;
 
@@ -868,26 +887,159 @@ void R_SetupPitch(player_t* player)
     }
 }
 
+//
+// R_LerpCoord
+//
+// Do linear interpolation on a fixed_t coordinate value from oldpos to
+// newpos.
+//
+fixed_t R_LerpCoord(fixed_t lerp, fixed_t oldpos, fixed_t newpos)
+{
+   return oldpos + FixedMul(lerp, newpos - oldpos);
+}
+
+#define LLANG360 4294967296LL
+
+#define longabs(a) (a < 0 ? -a : a)
+
+//
+// R_LerpAngle
+//
+// Do linear interpolation on an angle_t BAM from astart to aend.
+//
+angle_t R_LerpAngle(fixed_t lerp, angle_t astart, angle_t aend)
+{
+   int64_t start = astart;
+   int64_t end   = aend;
+   int64_t diff  = start - end;
+   int64_t value = longabs(diff);
+   if(value > ANG180)
+   {
+      if(end > start)
+         start += LLANG360;
+      else
+         end += LLANG360;
+   }
+   value = start + ((end - start) * lerp / 65536);
+   if(value >= 0 && value < LLANG360)
+      return (angle_t)value;
+   else
+      return (angle_t)(value % LLANG360);
+}
+
+
+//
+// R_GetLerp
+//
+// haleyjd 20140902: [SVE] interpolation
+//
+fixed_t R_GetLerp(void)
+{
+    if(d_interpolate &&
+        !(paused || (menupause && !demoplayback && !netgame)))
+        return I_TimerGetFrac();
+    else
+        return FRACUNIT;
+}
+
+//
+// R_interpolateViewPoint
+//
+// Interpolate a rendering view point based on the player's location.
+//
+void R_interpolateViewPoint(player_t *player, fixed_t lerp)
+{
+    if(lerp == FRACUNIT)
+    {
+        viewx     = player->mo->x;
+        viewy     = player->mo->y;
+        viewz     = player->viewz;
+        viewangle = player->mo->angle + viewangleoffset;
+    }
+    else
+    {
+        viewx     = R_LerpCoord(lerp, player->mo->prevpos.x,     player->mo->x);
+        viewy     = R_LerpCoord(lerp, player->mo->prevpos.y,     player->mo->y);
+        viewz     = R_LerpCoord(lerp, player->prevviewz,         player->viewz);
+        viewangle = R_LerpAngle(lerp, player->mo->prevpos.angle, player->mo->angle) + viewangleoffset;
+    }
+}
+
+//
+// R_SetSectorInterpolationState
+//
+// haleyjd 20140904: [SVE] If passed SEC_INTERPOLATE, current floor and ceiling
+// heights are backed up and then replaced with interpolated values. If passed
+// SEC_NORMAL, backed up sector heights are restored.
+//
+void R_SetSectorInterpolationState(secinterpstate_e state)
+{
+    int i;
+
+    switch(state)
+    {
+    case SEC_INTERPOLATE:
+        for(i = 0; i < numsectors; i++)
+        {
+            sectorinterp_t *si  = &sectorinterps[i];
+            sector_t       *sec = &sectors[i];
+
+            if(si->prevfloorheight != sec->floorheight ||
+               si->prevceilingheight != sec->ceilingheight)
+            {
+                si->interpolated = true;
+
+                // backup heights
+                si->backfloorheight   = sec->floorheight;
+                si->backceilingheight = sec->ceilingheight;
+
+                // set interpolated heights
+                sec->floorheight   = R_LerpCoord(viewlerp, si->prevfloorheight,   sec->floorheight);
+                sec->ceilingheight = R_LerpCoord(viewlerp, si->prevceilingheight, sec->ceilingheight);
+            }
+            else
+                si->interpolated = false;
+        }
+        break;
+    case SEC_NORMAL:
+        for(i = 0; i < numsectors; i++)
+        {
+            sectorinterp_t *si  = &sectorinterps[i];
+            sector_t       *sec = &sectors[i];
+
+            // restore backed up heights
+            if(si->interpolated)
+            {
+                sec->floorheight   = si->backfloorheight;
+                sec->ceilingheight = si->backceilingheight;
+            }
+        }
+        break;
+    }
+}
 
 //
 // R_SetupFrame
 //
 void R_SetupFrame (player_t* player)
 {		
-    int		i;
+    int     i;
+    
+    // haleyjd 20140902: [SVE] interpolation
+    viewlerp = R_GetLerp();
     
     R_SetupPitch(player);  // villsa [STRIFE]
 
     viewplayer = player;
-    viewx = player->mo->x;
-    viewy = player->mo->y;
-    viewangle = player->mo->angle + viewangleoffset;
+    R_interpolateViewPoint(player, viewlerp);
     extralight = player->extralight;
 
-    viewz = player->viewz;
-    
     viewsin = finesine[viewangle>>ANGLETOFINESHIFT];
     viewcos = finecosine[viewangle>>ANGLETOFINESHIFT];
+
+    // haleyjd 20140904: [SVE] set interpolated sector heights
+    if(viewlerp != FRACUNIT)
+        R_SetSectorInterpolationState(SEC_INTERPOLATE);
 	
     sscount = 0;
 	
@@ -914,8 +1066,16 @@ void R_SetupFrame (player_t* player)
 //
 // R_RenderView
 //
+
 void R_RenderPlayerView (player_t* player)
 {	
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_RenderPlayerView(player);
+        return;
+    }
+
     R_SetupFrame (player);
 
     // Clear buffers.
@@ -939,6 +1099,10 @@ void R_RenderPlayerView (player_t* player)
     NetUpdate ();
     
     R_DrawMasked ();
+
+    // haleyjd 20140904: [SVE] remove sector interpolations
+    if(viewlerp != FRACUNIT)
+        R_SetSectorInterpolationState(SEC_NORMAL);
 
     // Check for new console commands.
     NetUpdate ();				

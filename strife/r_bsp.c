@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -43,8 +44,10 @@ line_t*		linedef;
 sector_t*	frontsector;
 sector_t*	backsector;
 
-drawseg_t	drawsegs[MAXDRAWSEGS];
-drawseg_t*	ds_p;
+// haleyjd 20140831: [SVE] remove drawsegs limit
+drawseg_t *drawsegs;
+drawseg_t *ds_p;
+unsigned int maxdrawsegs;
 
 
 void
@@ -77,8 +80,8 @@ typedef	struct
     
 } cliprange_t;
 
-
-#define MAXSEGS		32
+// haleyjd 20140831: [SVE] raised MAXSEGS to proper amount; more shoutouts to Lee Killough
+#define MAXSEGS (SCREENWIDTH/2 + 1)
 
 // newend is one past the last valid seg
 cliprange_t*	newend;

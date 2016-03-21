@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -34,6 +35,24 @@ extern	int	levelTimeCount;
 //      Define values for map objects
 #define MO_TELEPORTMAN          14
 
+// haleyjd 08/30/10: [STRIFE] MAXANIMS raised from 32 to 40
+#define MAXANIMS                40
+
+//
+// Animating textures and planes
+// There is another anim_t used in wi_stuff, unrelated.
+//
+typedef struct
+{
+    boolean	istexture;
+    int		picnum;
+    int		basepic;
+    int		numpics;
+    int		speed;
+} anim_t;
+
+extern anim_t  anims[MAXANIMS];
+extern anim_t* lastanim;
 
 // at game start
 void    P_InitPicAnims (void);
@@ -191,6 +210,7 @@ void    P_SpawnFireFlicker (sector_t* sector);
 void    T_LightFlash (lightflash_t* flash);
 void    P_SpawnLightFlash (sector_t* sector);
 void    T_StrobeFlash (strobe_t* flash);
+void    T_FireFlicker (fireflicker_t* flick); // [SVE]
 
 void
 P_SpawnStrobeFlash
@@ -308,7 +328,7 @@ typedef struct
     boolean	crush;
     int		tag;
     plattype_e	type;
-    
+  
 } plat_t;
 
 
@@ -317,8 +337,9 @@ typedef struct
 #define PLATSPEED		FRACUNIT
 #define MAXPLATS		30
 
-
-extern plat_t*	activeplats[MAXPLATS];
+// haleyjd 20140816: [SVE] remove activeplats limit
+extern plat_t **activeplats;
+extern int      numactiveplats;
 
 void    T_PlatRaise(plat_t*	plat);
 
@@ -339,17 +360,17 @@ void    P_ActivateInStasis(int tag);
 //
 typedef enum
 {
-    vld_normal,
-    vld_close30ThenOpen,
-    vld_close,
-    vld_open,
-    vld_raiseIn5Mins,
-    vld_blazeRaise,
-    vld_blazeOpen,
-    vld_blazeClose,
-    vld_shopClose,          // villsa [STRIFE]
-    vld_splitRaiseNearest,  // villsa [STRIFE]
-    vld_splitOpen           // villsa [STRIFE]
+    dr_normal,
+    dr_close30ThenOpen,
+    dr_close,
+    dr_open,
+    dr_raiseIn5Mins,
+    dr_blazeRaise,
+    dr_blazeOpen,
+    dr_blazeClose,
+    dr_shopClose,          // villsa [STRIFE]
+    dr_splitRaiseNearest,  // villsa [STRIFE]
+    dr_splitOpen           // villsa [STRIFE]
 
 } vldoor_e;
 
@@ -534,7 +555,9 @@ typedef struct
 #define CEILWAIT		150
 #define MAXCEILINGS		30
 
-extern ceiling_t*	activeceilings[MAXCEILINGS];
+// haleyjd 20140817: [SVE] remove activeceilings limit
+extern ceiling_t **activeceilings;
+extern int numactiveceilings;
 
 int
 EV_DoCeiling
@@ -585,7 +608,10 @@ typedef enum
     raiseFloor512,
 
     // [STRIFE] New floor type - used for the coolant reactor pit
-    raiseFloor512AndChange
+    raiseFloor512AndChange,
+
+    // [SVE] Unique type for initializing stair building thinkers
+    buildStair
     
 } floor_e;
 

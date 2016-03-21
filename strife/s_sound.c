@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -27,6 +28,8 @@
 
 #include "doomstat.h"
 #include "doomtype.h"
+
+#include "d_main.h"
 
 #include "sounds.h"
 #include "s_sound.h"
@@ -110,6 +113,14 @@ static boolean mus_paused;
 // Music currently being played
 
 static musicinfo_t *mus_playing = NULL;
+
+// [SVE]: remember track number too, for convenience
+
+static int mus_tracknum;
+
+// [SVE]: remember if music is looping or not
+
+static int mus_looping;
 
 // Number of channels to use
 
@@ -209,6 +220,17 @@ static void S_StopChannel(int cnum)
     }
 }
 
+#define MINCTCMAP 36
+#define MAXCTCMAP 38
+
+// haleyjd 20140923: [SVE] Capture the Chalice map track assignments
+static int ctcmusic[] =
+{
+    mus_strike, // Castle Clash (James "Quasar" Haley)
+    mus_instry, // Killing Grounds (Samuel "Kaiser" Villarreal)
+    mus_fight2, // Ordered Chaos (Samuel "Kaiser" Villarreal)
+};
+
 //
 // Per level startup code.
 // Kills playing sounds at start of level,
@@ -235,13 +257,26 @@ void S_Start(void)
     // start new music for the level
     mus_paused = 0;
 
-    // [STRIFE] Some interesting math here ;)
-    if(gamemap <= 31)
-        mnum = 1;
+    // [SVE]: CTC map music selections
+    if(gamemap >= MINCTCMAP && gamemap <= MAXCTCMAP)
+    {
+        S_ChangeMusic(ctcmusic[gamemap - MINCTCMAP], true);
+    }
+    // [SVE] svillarreal - custom music for secret map
+    else if(gamemap == 35)
+    {
+        S_ChangeMusic(mus_tribal, true);
+    }
     else
-        mnum = -30;
+    {
+        // [STRIFE] Some interesting math here ;)
+        if(gamemap <= 31)
+            mnum = 1;
+        else
+            mnum = -30;
 
-    S_ChangeMusic(gamemap + mnum, true);
+        S_ChangeMusic(gamemap + mnum, true);
+    }
 }
 
 void S_StopSound(mobj_t *origin)
@@ -392,6 +427,10 @@ static int S_AdjustSoundParams(mobj_t *listener, mobj_t *source,
                 * ((S_CLIPPING_DIST - approx_dist)>>FRACBITS))
             / S_ATTENUATOR; 
     }
+
+    // haleyjd 20140906: [SVE] if a voice is playing, quarter volume.
+    if(i_voicehandle >= 0)
+        *vol /= 4;
     
     return (*vol > 0);
 }
@@ -562,6 +601,41 @@ static voiceinfo_t *S_getVoice(const char *name, int lumpnum)
     return voice;
 }
 
+// [SVE]: this table helps fix up the demo maps
+static const char *demoVoices[][2] =
+{
+    { "VOC2", "VOC1002" },
+    { "VOC4", "VOC223"  },
+    { "VOC6", "VOC205"  },
+    { "VOC7", "VOC225"  },
+    { "VOC8", "VOC233"  },
+    { "VOC9", "VOC237"  }
+};
+
+//
+// S_replaceDemoVoice
+//
+// haleyjd 20140906: [SVE] Remap some voice lumps when we are playing the
+// demo levels in the retail version of the game so that what's going on
+// makes sense. The vast majority of the Blackbird dialogs were re-recorded
+// with improved phrasing or just provided in a higher sample rate, so we use
+// those where they exist. Otherwise, the lumps have been added to SVE.wad.
+//
+static const char *S_replaceDemoVoice(const char *lumpname)
+{
+    int i;
+
+    if(!lumpname)
+        return lumpname;
+
+    for(i = 0; i < arrlen(demoVoices); i++)
+    {
+        if(!strncasecmp(lumpname, demoVoices[i][0], 8))
+            return demoVoices[i][1];
+    }
+    return lumpname;
+}
+
 //
 // I_StartVoice
 //
@@ -587,6 +661,10 @@ void I_StartVoice(const char *lumpname)
     // user has disabled voices?
     if(disable_voices)
         return;
+
+    // haleyjd 20140906: [SVE] check for demo redirection
+    if(!classicmode && isregistered && gamemap >= 32 && gamemap <= 34)
+        lumpname = S_replaceDemoVoice(lumpname);
 
     // have a voice playing already? stop it.
     if(i_voicehandle >= 0)
@@ -760,16 +838,21 @@ void S_ChangeMusic(int musicnum, int looping)
     char namebuf[9];
     void *handle;
 
-    if (musicnum <= mus_None || musicnum >= NUMMUSIC)
+    if(musicnum <= mus_None || musicnum >= NUMMUSIC)
     {
-        I_Error("Bad music number %d", musicnum);
+        // [SVE]: no error, use a default music track.
+        music = &S_music[mus_action];
     }
     else
     {
         music = &S_music[musicnum];
     }
 
-    if (mus_playing == music)
+    mus_tracknum = musicnum; // [SVE]
+
+    // [SVE]: do start the track if the looping is different; this fixes 
+    // loading a save on the Prison while the intro is playing.
+    if (mus_playing == music && mus_looping == looping)
     {
         return;
     }
@@ -791,11 +874,21 @@ void S_ChangeMusic(int musicnum, int looping)
     I_PlaySong(handle, looping);
 
     mus_playing = music;
+    mus_looping = looping; // [SVE]: remember looping status
 }
 
 boolean S_MusicPlaying(void)
 {
     return I_MusicIsPlaying();
+}
+
+//
+// haleyjd 20141116: [SVE] Query currently playing music info.
+//
+void S_GetCurrentMusic(int *track, int *looping)
+{
+    *track   = mus_tracknum;
+    *looping = mus_looping;
 }
 
 void S_StopMusic(void)

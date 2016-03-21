@@ -62,5 +62,12 @@ R_ClipVisSprite
   int			xl,
   int			xh );
 
+typedef struct spritepos_s
+{
+   fixed_t x, y, z;
+} spritepos_t;
+
+void R_interpolateThingPosition(const mobj_t *thing, spritepos_t *pos);
+
 
 #endif

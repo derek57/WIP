@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -28,6 +29,6 @@
 // Carries out all thinking of monsters and players.
 void P_Ticker (void);
 
-
+void P_RemoveThinkerDelayed(thinker_t *thinker);
 
 #endif

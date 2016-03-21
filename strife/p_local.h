@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -94,6 +95,20 @@ void    P_Thrust (player_t* player, angle_t angle, fixed_t move);
 // villsa [STRIFE]
 char*   P_RemoveInventoryItem(player_t *player, int slot, int amount);
 
+// [SVE] svillarreal
+fixed_t P_PitchToFixedSlope(const int pitch);
+
+// Achievement flags
+enum
+{
+    ACH_ALLOW_SP = 0x01,
+    ACH_ALLOW_DM = 0x02,
+    
+    ACH_ALLOW_ANY = (ACH_ALLOW_SP | ACH_ALLOW_DM)
+};
+
+// [SVE]
+boolean P_CheckPlayersCheating(int flags);
 
 //
 // P_MOBJ
@@ -124,13 +139,13 @@ mobj_t* P_SubstNullMobj (mobj_t* th);
 boolean	P_SetMobjState (mobj_t* mobj, statenum_t state);
 void 	P_MobjThinker (mobj_t* mobj);
 
-void	P_SpawnPuff (fixed_t x, fixed_t y, fixed_t z);
+mobj_t*	P_SpawnPuff (fixed_t x, fixed_t y, fixed_t z);
 mobj_t* P_SpawnSparkPuff(fixed_t x, fixed_t y, fixed_t z);  // villsa [STRIFE]
 void 	P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, int damage);
 mobj_t* P_SpawnMissile (mobj_t* source, mobj_t* dest, mobjtype_t type);
 mobj_t* P_SpawnFacingMissile(mobj_t* source, mobj_t* target, mobjtype_t type);  // villsa [STRIFE]
 mobj_t* P_SpawnPlayerMissile(mobj_t* source, mobjtype_t type);
-mobj_t* P_SpawnMortar(mobj_t *source, mobjtype_t type); // villsa [STRIFE]
+mobj_t* P_SpawnMortar(mobj_t *source, mobj_t *target, mobjtype_t type); // villsa [STRIFE]
 void    P_ExplodeMissile (mobj_t* mo); // villsa [STRIFE]
 
 
@@ -144,6 +159,7 @@ void A_AlertSpectreC(mobj_t* actor);
 void A_FaceTarget (mobj_t* actor);
 void P_FreePrisoners(void);
 void P_DestroyConverter(void);
+boolean P_ClaxonsActive(void); // [SVE] svillarreal
 
 //
 // P_MAPUTL
@@ -198,7 +214,7 @@ boolean P_BlockThingsIterator (int x, int y, boolean(*func)(mobj_t*) );
 #define PT_ADDTHINGS	2
 #define PT_EARLYOUT		4
 
-extern divline_t	trace;
+extern divline_t	p_trace;
 
 boolean
 P_PathTraverse
@@ -258,12 +274,14 @@ P_RadiusAttack
   mobj_t*	source,
   int		damage );
 
-
+// haleyjd 20140904: [SVE]
+void P_SaveSectorPositions(void);
 
 //
 // P_SETUP
 //
 extern byte*		rejectmatrix;	// for fast sight rejection
+extern byte*        pvsmatrix; // [SVE] svillarreal
 extern short*		blockmaplump;	// offsets in blockmap are from here
 extern short*		blockmap;
 extern int		bmapwidth;
@@ -291,6 +309,8 @@ P_DamageMobj
   mobj_t*	source,
   int		damage );
 
+// [SVE]
+void P_MessageAllPlayers(char *message, int sfx_id);
 
 //
 // P_SPEC

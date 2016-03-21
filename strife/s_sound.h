@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -77,6 +78,8 @@ void S_StopMusic(void);
 void S_PauseSound(void);
 void S_ResumeSound(void);
 
+// [SVE]
+void S_GetCurrentMusic(int *track, int *looping);
 
 //
 // Updates music & sounds

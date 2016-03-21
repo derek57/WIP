@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -55,6 +56,7 @@ typedef enum
     GS_UNKNOWN,
     GS_FINALE,
     GS_DEMOSCREEN,
+    GS_INTERMISSION // haleyjd 20140921: [SVE] For Capture the Chalice
 } gamestate_t;
 
 typedef enum

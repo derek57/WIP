@@ -78,50 +78,6 @@ typedef struct
     mappatch_t	patches[1];
 } PACKEDATTR maptexture_t;
 
-
-// A single patch from a texture definition,
-//  basically a rectangular area within
-//  the texture rectangle.
-typedef struct
-{
-    // Block origin (allways UL),
-    // which has allready accounted
-    // for the internal origin of the patch.
-    short	originx;	
-    short	originy;
-    int		patch;
-} texpatch_t;
-
-
-// A maptexturedef_t describes a rectangular texture,
-//  which is composed of one or more mappatch_t structures
-//  that arrange graphic patches.
-
-typedef struct texture_s texture_t;
-
-struct texture_s
-{
-    // Keep name for switch changing, etc.
-    char	name[8];		
-    short	width;
-    short	height;
-
-    // Index in textures list
-
-    int         index;
-
-    // Next in hash table chain
-
-    texture_t  *next;
-    
-    // All the patches[patchcount]
-    //  are drawn back to front into the cached texture.
-    short	patchcount;
-    texpatch_t	patches[1];		
-};
-
-
-
 int		firstflat;
 int		lastflat;
 int		numflats;
@@ -155,6 +111,9 @@ int*		texturetranslation;
 fixed_t*	spritewidth;	
 fixed_t*	spriteoffset;
 fixed_t*	spritetopoffset;
+
+// [SVE] svillarreal
+fixed_t*    spriteheight;
 
 lighttable_t	*colormaps;
 
@@ -672,6 +631,9 @@ void R_InitSpriteLumps (void)
     spriteoffset = Z_Malloc (numspritelumps*sizeof(*spriteoffset), PU_STATIC, 0);
     spritetopoffset = Z_Malloc (numspritelumps*sizeof(*spritetopoffset), PU_STATIC, 0);
 
+    // [SVE] svillarreal
+    spriteheight = Z_Malloc(numspritelumps*sizeof(*spriteheight), PU_STATIC, 0);
+
     for (i=0 ; i< numspritelumps ; i++)
     {
         if(!(i&63))
@@ -687,6 +649,9 @@ void R_InitSpriteLumps (void)
         spritewidth[i] = SHORT(patch->width)<<FRACBITS;
         spriteoffset[i] = SHORT(patch->leftoffset)<<FRACBITS;
         spritetopoffset[i] = SHORT(patch->topoffset)<<FRACBITS;
+
+        // [SVE] svillarreal
+        spriteheight[i] = SHORT(patch->height)<<FRACBITS;
     }
 }
 

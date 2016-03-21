@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -106,13 +107,16 @@ boolean HUlib_addCharToTextLine(hu_textline_t *t, char ch);
 boolean HUlib_delCharFromTextLine(hu_textline_t *t);
 
 // draws tline
-void	HUlib_drawTextLine(hu_textline_t *l, boolean drawcursor);
+void	HUlib_drawTextLine(hu_textline_t *l, boolean drawcursor, boolean longtext);
 
 // erases text line
 void	HUlib_eraseTextLine(hu_textline_t *l);
 
 // villsa [STRIFE]
-void HUlib_drawYellowText(int x, int y, char *text);
+void HUlib_drawYellowText(int x, int y, const char *text, boolean shadowed);
+
+// [SVE]
+int HUlib_yellowTextWidth(const char *text);
 
 
 //
@@ -181,5 +185,11 @@ void HUlib_drawIText(hu_itext_t* it);
 
 // erases all itext lines
 void HUlib_eraseIText(hu_itext_t* it); 
+
+// [SVE]: make a pretty player name for display
+char *HUlib_makePrettyPlayerName(int playerNum);
+
+// [SVE]: frags chart
+void HUlib_drawFrags(void);
 
 #endif

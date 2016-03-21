@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -31,17 +32,23 @@
 typedef struct
 {
     // 0 = no cursor here, 1 = ok, 2 = arrows ok
-    short	status;
+    short  status;
     
-    char	name[10];
+    char *name; // [SVE]
     
     // choice = menu item #.
     // if status = 2,
     //   choice=0:leftarrow,1:rightarrow
-    void	(*routine)(int choice);
+    void (*routine)(int choice);
     
     // hotkey in menu
-    char	alphaKey;			
+    char   alphaKey;
+
+    // haleyjd 20141004: [SVE] mouse support
+    int    x;
+    int    y;
+    int    w;
+    int    h;
 } menuitem_t;
 
 typedef struct menu_s
@@ -87,6 +94,8 @@ void M_StartControlPanel (void);
 
 // haleyjd 09/04/10: Externalized. Draws menu text.
 int M_WriteText(int x, int y, const char *string);
+int M_StringWidth(const char* string);
+int M_StringHeight(const char* string);
 
 // haleyjd 09/04/10: [STRIFE] New function.
 void M_DialogDimMsg(int x, int y, char *str, boolean useyfont);

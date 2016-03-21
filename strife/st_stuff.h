@@ -56,6 +56,25 @@ void ST_Start (void);
 // Called by startup code.
 void ST_Init (void);
 
+// [SVE] externalized
+int ST_calcFrags(int pnum);
+
+// [SVE] svillarreal
+#include "p_mobj.h"
+
+typedef struct damagemarker_s
+{
+    struct damagemarker_s *prev;
+    struct damagemarker_s *next;
+    int tics;
+    mobj_t *source;
+} damagemarker_t;
+
+extern damagemarker_t dmgmarkers;
+
+void ST_ClearDamageMarkers(void);
+void ST_AddDamageMarker(mobj_t *source);
+
 
 
 // States for status bar code.
@@ -96,5 +115,8 @@ extern cheatseq_t cheat_dev;     // [STRIFE]: new cheat
 
 extern cheatseq_t cheat_powerup[];
 
+// [SVE]
+void ST_InvLeft(void);
+void ST_InvRight(void);
 
 #endif

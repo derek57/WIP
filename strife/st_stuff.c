@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -64,6 +65,8 @@
 #include "m_controls.h"
 #include "hu_lib.h"     // [STRIFE]
 #include "hu_stuff.h"
+
+#include "net_client.h"
 
 //
 // STATUS BAR DATA
@@ -154,9 +157,6 @@ static st_stateenum_t   st_gamestate;
 // whether left-side main status bar is active
 static boolean          st_statusbaron;
 
-// villsa [STRIFE]
-static boolean          st_dosizedisplay = false;
-
 // haleyjd 09/01/10: [STRIFE]
 // Whether or not a popup is currently displayed
 static boolean          st_displaypopup = false;
@@ -184,6 +184,9 @@ static int              st_lastammo;
 static int              st_lastarmortype;
 static int              st_lasthealth;
 
+// [SVE] svillarreal
+static int              st_invtics = 0;
+
 // haleyjd 20100901: [STRIFE] sbar -> invback
 // main inventory background and other bits
 static patch_t*         invback;     // main bar
@@ -194,6 +197,11 @@ static patch_t*         invpop2;     // plain popup frame
 static patch_t*         invpbak;     // popup background w/details
 static patch_t*         invpbak2;    // plain popup background
 static patch_t*         invcursor;   // cursor
+// [SVE] svillarreal
+static patch_t*         invpopf1;
+static patch_t*         invpopf2;
+static patch_t*         invbakf1;
+static patch_t*         invbakf2;
 
 // ammo/weapon/armor patches
 static patch_t*         invammo[NUMAMMO]; // ammo/weapons
@@ -253,6 +261,9 @@ cheatseq_t cheat_midas      = CHEAT("donnytrump", 0);   // [STRIFE]: new cheat
 cheatseq_t cheat_lego       = CHEAT("lego", 0);         // [STRIFE]: new cheat
 cheatseq_t cheat_dev        = CHEAT("dots", 0);         // [STRIFE]: new cheat
 
+// [SVE] new cheats (mostly development aids)
+cheatseq_t cheat_gimme      = CHEAT("gimme", 3);        // [SVE]: give inventory cheat
+
 // haleyjd 20110224: enumeration for access to powerup cheats
 enum
 {
@@ -279,9 +290,227 @@ cheatseq_t cheat_powerup[NUM_ST_PUMPUP] = // [STRIFE]
     CHEAT("pumpup", 0),
 };
 
+//
+// [SVE] svillarreal
+//
+// DAMAGE MARKER SYSTEM
+//
+
+damagemarker_t dmgmarkers;
+
+//
+// ST_RunDamageMarkers
+//
+
+static void ST_RunDamageMarkers(void)
+{
+    damagemarker_t *dmgmarker, *next;
+    
+    for(dmgmarker = dmgmarkers.next; dmgmarker != &dmgmarkers; dmgmarker = next)
+    {
+        next = dmgmarker->next;
+
+        if(!dmgmarker->tics--)
+        {
+            damagemarker_t* marker = dmgmarker;
+            
+            P_SetTarget(&marker->source, NULL);
+            
+            (next->prev = dmgmarker = marker->prev)->next = next;
+            Z_Free(marker);
+        }
+    }
+}
+
+//
+// ST_ClearDamageMarkers
+//
+
+void ST_ClearDamageMarkers(void)
+{
+    dmgmarkers.next = dmgmarkers.prev = &dmgmarkers;
+}
+
+//
+// ST_AddDamageMarker
+//
+
+void ST_AddDamageMarker(mobj_t *source)
+{
+    damagemarker_t* dmgmarker;
+    mobj_t *target;
+    
+    target = players[consoleplayer].mo;
+
+    if(source == NULL || source == target)
+    {
+        return;
+    }
+    
+    dmgmarker               = Z_Calloc(1, sizeof(*dmgmarker), PU_LEVEL, 0);
+    dmgmarker->tics         = 32;
+    
+    P_SetTarget(&dmgmarker->source, source);
+    
+    dmgmarkers.prev->next   = dmgmarker;
+    dmgmarker->next         = &dmgmarkers;
+    dmgmarker->prev         = dmgmarkers.prev;
+    dmgmarkers.prev         = dmgmarker;
+}
+
 //cheatseq_t cheat_choppers = CHEAT("idchoppers", 0); [STRIFE] no such thing
 
 void M_SizeDisplay(int choice); // villsa [STRIFE]
+
+//
+// ST_JoystickResponder
+//
+// [SVE] svillarreal
+//
+
+static boolean ST_JoystickResponder(event_t *ev)
+{
+    static boolean st_btnstate = false;
+
+    // give the automap responder a chance since
+    // joystick button mapping is limited
+    if(automapactive)
+    {
+        return false;
+    }
+
+    if(ev->type == ev_joybtnup)
+    {
+        if(ev->data1 != joybinvpop &&
+           ev->data1 != joybmission &&
+           ev->data1 != joybinvkey)
+        {
+            return false;
+        }
+
+        if(ev->data1 == joybinvpop)
+        {
+            st_showinvpop = false;
+        }
+        else
+        {
+            if(ev->data1 == joybmission)
+            {
+                st_showobjective = false;
+            }
+            else
+            {
+                if(ev->data1 == joybinvkey)
+                {
+                    st_showkeys = false;
+                    st_btnstate = false;
+                }
+            }
+        }
+
+        if(!st_showkeys && !st_showobjective && !st_showinvpop)
+        {
+             if(!st_popupdisplaytics)
+             {
+                 st_displaypopup = false;
+             }
+
+             return true;
+        }
+    }
+    else if(ev->type == ev_joybtndown)
+    {
+        if(plyr->mo->health <= 0)
+        {
+            return false;
+        }
+
+        if(ev->data1 == joybinvpop || ev->data1 == joybinvkey || ev->data1 == joybmission)
+        {
+            if(ev->data1 == joybinvkey)
+            {
+                st_showobjective = false;
+                st_showinvpop = false;
+
+                if(!st_btnstate)
+                {
+                    st_btnstate = true;
+                    if(++st_keypage > 2)
+                    {
+                        st_popupdisplaytics = 0;
+                        st_showkeys = false;
+                        st_displaypopup = false;
+                        st_keypage = -1;
+                    }
+                }
+
+                if(netgame)
+                {
+                    st_popupdisplaytics = 20;
+                }
+                else
+                {
+                    st_popupdisplaytics = 50;
+                }
+
+                st_showkeys = true;
+            }
+            else
+            {
+                if(ev->data1 != joybmission || netgame)
+                {
+                    if(ev->data1 ==  joybinvpop)
+                    {
+                        st_keypage = -1;
+                        st_popupdisplaytics = false;
+                        st_showkeys = false;
+                        st_showobjective = false;
+                        st_showinvpop = true;
+                    }
+                }
+                else
+                {
+                    st_showkeys = netgame;
+                    st_showinvpop = netgame;
+                    st_keypage = -1;
+
+                    st_popupdisplaytics = ev->data2 ^ joybmission;
+                    st_showobjective = true;
+                }
+            }
+
+            if(st_showkeys || st_showobjective || st_showinvpop)
+            {
+                st_displaypopup = true;
+            }
+
+            return true;
+        }
+
+        if(ev->data1 == joybinvleft) // inventory move left
+        {
+            if(plyr->inventorycursor > 0)
+            {
+                plyr->inventorycursor--;
+            }
+
+            st_invtics = 50;
+            return true;
+        }
+        else if(ev->data1 == joybinvright)
+        {
+            if(plyr->inventorycursor < plyr->numinventory - 1)
+            {
+                plyr->inventorycursor++;
+            }
+
+            st_invtics = 50;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 //
 // STATUS BAR CODE
@@ -291,6 +520,23 @@ void ST_Stop(void);
 // [STRIFE]
 static char st_msgbuf[ST_MSGWIDTH];
 
+// [SVE]: For calling from g_game
+void ST_InvLeft(void)
+{
+    if(players[consoleplayer].inventorycursor > 0)
+        players[consoleplayer].inventorycursor--;
+    st_invtics = 50;
+}
+
+// [SVE]: For calling from g_game
+void ST_InvRight(void)
+{
+    if(players[consoleplayer].inventorycursor < players[consoleplayer].numinventory - 1)
+        players[consoleplayer].inventorycursor++;
+    st_invtics = 50;
+}
+
+
 // Respond to keyboard input events,
 //  intercept cheats.
 boolean ST_Responder(event_t* ev)
@@ -298,6 +544,14 @@ boolean ST_Responder(event_t* ev)
     // haleyjd 09/27/10: made static to ST_Responder
     static boolean st_keystate = false;
     int i;
+    // [SVE] svillarreal - keep track if we pressed a key or not and still allow
+    // us to enter cheats without key inputs interfering
+    boolean bKeyPressed = false;
+
+    if(ev->type == ev_joybtndown || ev->type == ev_joybtnup)
+    {
+        return ST_JoystickResponder(ev);
+    }
 
     // Filter automap on/off.
     if(ev->type == ev_keyup)
@@ -347,10 +601,6 @@ boolean ST_Responder(event_t* ev)
              if(!st_popupdisplaytics)
              {
                  st_displaypopup = false;
-                 if(st_dosizedisplay)
-                     M_SizeDisplay(true);
-
-                 st_dosizedisplay = false;
              }
         }
 
@@ -395,7 +645,8 @@ boolean ST_Responder(event_t* ev)
                     st_showkeys = false;
                     st_displaypopup = false;
                     st_keypage = -1;
-                    return true;
+
+                    bKeyPressed = true;
                 }
             }
 
@@ -434,11 +685,6 @@ boolean ST_Responder(event_t* ev)
         if(st_showkeys || st_showobjective || st_showinvpop)
         {
             st_displaypopup = true;
-            if(viewheight == SCREENHEIGHT)
-            {
-                M_SizeDisplay(false);
-                st_dosizedisplay = true;
-            }
         }
     }
     
@@ -446,18 +692,21 @@ boolean ST_Responder(event_t* ev)
     {
         if(plyr->inventorycursor > 0)
             plyr->inventorycursor--;
-        return true;
+        bKeyPressed = true;
+        st_invtics = 50;
     }
     else if(ev->data1 == key_invright)
     {
         if(plyr->inventorycursor < plyr->numinventory - 1)
             plyr->inventorycursor++;
-        return true;
+        bKeyPressed = true;
+        st_invtics = 50;
     }
     else if(ev->data1 == key_invhome)
     {
         plyr->inventorycursor = 0;
-        return true;
+        bKeyPressed = true;
+        st_invtics = 50;
     }
     else if(ev->data1 == key_invend)
     {
@@ -465,7 +714,8 @@ boolean ST_Responder(event_t* ev)
             plyr->inventorycursor = plyr->numinventory - 1;
         else 
             plyr->inventorycursor = 0;
-        return true;
+        bKeyPressed = true;
+        st_invtics = 50;
     }
 
     //
@@ -496,11 +746,14 @@ boolean ST_Responder(event_t* ev)
             plyr->message = DEH_String("devparm ON");
         else
             plyr->message = DEH_String("devparm OFF");
+        
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
     }
 
     // [STRIFE] Cheats below are not allowed in netgames or demos
     if(netgame || !usergame)
-        return false;
+        return bKeyPressed;
 
     if (cht_CheckCheat(&cheat_god, ev->data2))
     {
@@ -520,9 +773,14 @@ boolean ST_Responder(event_t* ev)
             plyr->st_update = true;
             plyr->message = DEH_String(STSTR_DQDOFF);
         }
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
     }
     else if (cht_CheckCheat(&cheat_ammo, ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
+
         // [STRIFE]: "BOOMSTIX" cheat for all normal weapons
         plyr->armorpoints = deh_idkfa_armor;
         plyr->armortype = deh_idkfa_armor_class;
@@ -568,6 +826,8 @@ boolean ST_Responder(event_t* ev)
 
             plyr->message = DEH_String("Cheater Keys Added");
         }
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
     }
     else if (cht_CheckCheat(&cheat_noclip, ev->data2))
     {
@@ -586,6 +846,8 @@ boolean ST_Responder(event_t* ev)
             plyr->message = DEH_String(STSTR_NCOFF);
             plyr->mo->flags &= ~MF_NOCLIP;
         }
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
     }
     else if(cht_CheckCheat(&cheat_stealth, ev->data2))
     {
@@ -595,6 +857,8 @@ boolean ST_Responder(event_t* ev)
             plyr->message = DEH_String("STEALTH BOOTS ON");
         else
             plyr->message = DEH_String("STEALTH BOOTS OFF");
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
     }
     
     for(i = 0; i < ST_PUMPUP_B + 3; ++i)
@@ -602,6 +866,8 @@ boolean ST_Responder(event_t* ev)
         // [STRIFE]: Handle berserk, invisibility, and envirosuit
         if(cht_CheckCheat(&cheat_powerup[i], ev->data2))
         {
+            // [SVE]: used beneficial cheats
+            HU_NotifyCheating(plyr);
             if(plyr->powers[i])
                 plyr->powers[i] = (i != 1);
             else
@@ -611,6 +877,8 @@ boolean ST_Responder(event_t* ev)
     }
     if(cht_CheckCheat(&cheat_powerup[ST_PUMPUP_H], ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         // [STRIFE]: PUMPUPH gives medical inventory items
         P_GiveItemToPlayer(plyr, SPR_STMP, MT_INV_MED1);
         P_GiveItemToPlayer(plyr, SPR_MDKT, MT_INV_MED2);
@@ -627,12 +895,16 @@ boolean ST_Responder(event_t* ev)
         }
         plyr->backpack = true;
 
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         for(i = 0; i < NUMAMMO; ++i)
             P_GiveAmmo(plyr, i, 1);
         plyr->message = DEH_String("you got the stuff!");
     }
     if(cht_CheckCheat(&cheat_powerup[ST_PUMPUP_S], ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         // [STRIFE]: PUMPUPS gives stamina and accuracy upgrades
         P_GiveItemToPlayer(plyr, SPR_TOKN, MT_TOKEN_STAMINA);
         P_GiveItemToPlayer(plyr, SPR_TOKN, MT_TOKEN_NEW_ACCURACY);
@@ -640,6 +912,8 @@ boolean ST_Responder(event_t* ev)
     }
     if(cht_CheckCheat(&cheat_powerup[ST_PUMPUP_T], ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         // [STRIFE] PUMPUPT gives targeter
         P_GivePower(plyr, pw_targeter);
         plyr->message = DEH_String("you got the stuff!");
@@ -649,7 +923,7 @@ boolean ST_Responder(event_t* ev)
     {
         // 'behold' power-up menu
         plyr->message = DEH_String(STSTR_BEHOLD);
-        return false;
+        return bKeyPressed;
     }
 
     if (cht_CheckCheat(&cheat_mypos, ev->data2))
@@ -681,15 +955,17 @@ boolean ST_Responder(event_t* ev)
         // Ohmygod - this is not going to work.
         if(gameversion == exe_strife_1_31)
         {
-            if ((isdemoversion && (map < 32 || map > 34)) ||
-                (isregistered  && (map <= 0 || map > 34)))
-                return false;
+            if ((isdemoversion && (map < 32 || map > 35)) ||
+                (isregistered  && (map <= 0 || map > 38)))
+                return bKeyPressed;
         }
         else
         {
             if (map <= 0 || map > 40)
-                return false;
+                return bKeyPressed;
         }
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
 
         // So be it.
         plyr->message = DEH_String(STSTR_CLEV);
@@ -707,9 +983,11 @@ boolean ST_Responder(event_t* ev)
         // BUG: should be <= 9. Shouldn't do anything bad though...
         if(spot <= 10) 
         {
+            // [SVE]: used beneficial cheats
+            HU_NotifyCheating(plyr);
             plyr->message = DEH_String("Spawning to spot");
             G_RiftCheat(spot);
-            return false;
+            return bKeyPressed;
         }
     }
 
@@ -718,12 +996,16 @@ boolean ST_Responder(event_t* ev)
     {
         stonecold ^= 1;
         plyr->message = DEH_String("Kill 'em.  Kill 'em All");
-        return false;
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
+        return bKeyPressed;
     }
 
     // villsa [STRIFE]
     if(cht_CheckCheat(&cheat_midas, ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         plyr->message = DEH_String("YOU GOT THE MIDAS TOUCH, BABY");
         P_GiveItemToPlayer(plyr, SPR_HELT, MT_TOKEN_TOUGHNESS);
     }
@@ -732,6 +1014,8 @@ boolean ST_Responder(event_t* ev)
     // haleyjd 20110224: No sigil in demo version
     if(!isdemoversion && cht_CheckCheat(&cheat_lego, ev->data2))
     {
+        // [SVE]: used beneficial cheats
+        HU_NotifyCheating(plyr);
         plyr->st_update = true;
         if(plyr->weaponowned[wp_sigil])
         {
@@ -751,10 +1035,39 @@ boolean ST_Responder(event_t* ev)
         // causes some VERY interesting behavior, when you type LEGO for the
         // sixth time. This shouldn't be done when taking it away, and yet it
         // is here... verified with vanilla.
-        plyr->pendingweapon = wp_sigil;
+        // haleyjd 20140817: [SVE] fix Sigil -1 glitch
+        if(classicmode || plyr->weaponowned[wp_sigil])
+            plyr->pendingweapon = wp_sigil;
     }
 
-    return false;
+#ifdef _DEBUG
+    // haleyjd 20140914: [SVE] "gimme" debug cheat
+    if(cht_CheckCheat(&cheat_gimme, ev->data2))
+    {
+        char buf[4];
+        char *end = NULL;
+        int  item;
+
+        cht_GetParam(&cheat_gimme, buf);
+        item = (int)strtol(buf, &end, 10);
+
+        if(item <= 1 || item >= NUMMOBJTYPES)
+            plyr->message = "INVALID ITEM";
+        else
+        {
+            static char itembuf[80];
+            HU_NotifyCheating(plyr);
+            P_GiveItemToPlayer(plyr, states[mobjinfo[item].spawnstate].sprite, item);
+            if(mobjinfo[item].name)
+                M_snprintf(itembuf, sizeof(itembuf), "You got %s", mobjinfo[item].name);
+            else
+                strncpy(itembuf, "You got the stuff", sizeof(itembuf));
+            plyr->message = itembuf;
+        }
+    }
+#endif
+
+    return bKeyPressed;
 }
 
 
@@ -805,6 +1118,12 @@ void ST_Ticker (void)
 
     w_ready.data = plyr->readyweapon;
 
+    // [SVE] svillarreal
+    if(st_invtics)
+    {
+        st_invtics--;
+    }
+
     // STRIFE-TODO: Gobbledeegunk.
     /*
     v2 = dword_88490-- == 1; // no clue yet...
@@ -821,12 +1140,13 @@ void ST_Ticker (void)
             st_displaypopup = false;
             st_showkeys = false;
             st_keypage = -1;
-
-            if(st_dosizedisplay)
-                M_SizeDisplay(true);  // mondo hack?
-
-            st_dosizedisplay = false;
         }
+    }
+    
+    // [SVE] svillarreal
+    if(d_dmgindictor)
+    {
+        ST_RunDamageMarkers();
     }
 
     // haleyjd 20100901: [STRIFE] Keys are handled on a popup
@@ -962,14 +1282,47 @@ void ST_drawNumFontY2(int x, int y, int num)
 //
 void ST_drawLine(int x, int y, int len, int color)
 {
-    byte putcolor = (byte)(color);
-    byte *drawpos = I_VideoBuffer + y * SCREENWIDTH + x;
-    int i = 0;
+    // [SVE] svillarreal - replaced with v_* function
+    V_DrawHorizLine(x, y, len, color);
+}
 
-    while(i < len)
+//
+// ST_DrawPopup1
+//
+// [SVE] svillarreal
+//
+
+static void ST_DrawPopup1(void)
+{
+    if(st_statusbaron)
     {
-        *drawpos++ = putcolor;
-        ++i;
+        V_DrawXlaPatch(0, 56, invpbak);
+        V_DrawPatchDirect(0, 56, invpop);
+    }
+    else
+    {
+        V_DrawXlaPatch(0, 56, invbakf1);
+        V_DrawPatchDirect(0, 56, invpopf1);
+    }
+}
+
+//
+// ST_DrawPopup2
+//
+// [SVE] svillarreal
+//
+
+static void ST_DrawPopup2(void)
+{
+    if(st_statusbaron)
+    {
+        V_DrawXlaPatch(0, 56, invpbak2);
+        V_DrawPatchDirect(0, 56, invpop2);
+    }
+    else
+    {
+        V_DrawXlaPatch(0, 56, invbakf2);
+        V_DrawPatchDirect(0, 56, invpopf2);
     }
 }
 
@@ -1007,7 +1360,17 @@ void ST_doRefresh(void)
         // haleyjd 20131031: BUG - vanilla is accessing a NULL pointer here when
         // playing back netdemos! It doesn't appear to draw anything, and there 
         // is no apparent ill effect on gameplay, so the best we can do is check.
-        if(netgame && stback)
+        // haleyjd 20140917: [SVE] Capture the Chalice
+        if(capturethechalice)
+        {
+            char *patch;
+            if(plyr->allegiance == CTC_TEAM_BLUE)
+                patch = "STBACKBT";
+            else
+                patch = "STBACKRT";
+            V_DrawPatch(ST_X, 173, W_CacheLumpName(patch, PU_CACHE));
+        }
+        else if(netgame && stback)
             V_DrawPatch(ST_X, 173, stback);
 
         if(plyr->inventorycursor >= 6)
@@ -1136,7 +1499,7 @@ void ST_Drawer (boolean fullscreen, boolean refresh)
 // haleyjd [STRIFE] New function.
 // Calculate frags for display on the frags popup.
 //
-static int ST_calcFrags(int pnum)
+int ST_calcFrags(int pnum)
 {
     int i;
     int result = 0;
@@ -1171,7 +1534,7 @@ static void ST_drawTime(int x, int y, int time)
     seconds = time % 60;
 
     DEH_snprintf(string, 16, "%02d:%02d:%02d", hours, minutes, seconds);
-    HUlib_drawYellowText(x, y, string);
+    HUlib_drawYellowText(x, y, string, false);
 }
 
 #define ST_KEYSPERPAGE   10
@@ -1194,8 +1557,7 @@ static boolean ST_drawKeysPopup(void)
     int x, y, yt, key, keycount;
     mobjinfo_t *info;
 
-    V_DrawXlaPatch(0, 56, invpbak2);
-    V_DrawPatchDirect(0, 56, invpop2);
+    ST_DrawPopup2();
 
     if(deathmatch)
     {
@@ -1211,14 +1573,22 @@ static boolean ST_drawKeysPopup(void)
         yt = 66;
         for(pnum = 0; pnum < MAXPLAYERS/2; pnum++)
         {
-            DEH_snprintf(buffer, sizeof(buffer), "stcolor%d", pnum+1);
+            if(capturethechalice) // [SVE]: CTC
+            {
+                if(players[pnum].allegiance == CTC_TEAM_BLUE)
+                    strncpy(buffer, "stcolor8", sizeof(buffer));
+                else
+                    strncpy(buffer, "stcolor2", sizeof(buffer));
+            }
+            else
+                DEH_snprintf(buffer, sizeof(buffer), "stcolor%d", pnum+1);
             colpatch = W_CacheLumpName(buffer, PU_CACHE);
             V_DrawPatchDirect(28, y, colpatch);
             frags = ST_calcFrags(pnum);
             DEH_snprintf(buffer, sizeof(buffer), "%s%d", player_names[pnum], frags);
-            HUlib_drawYellowText(38, yt, buffer);
+            HUlib_drawYellowText(38, yt, buffer, false);
             if(!playeringame[pnum])
-                HUlib_drawYellowText(28, pnum*17 + 65, "X");
+                HUlib_drawYellowText(28, pnum*17 + 65, "X", false);
             y  += 17;
             yt += 17;
         }
@@ -1228,14 +1598,22 @@ static boolean ST_drawKeysPopup(void)
         yt = 66;
         for(pnum = MAXPLAYERS/2; pnum < MAXPLAYERS; pnum++)
         {
-            DEH_snprintf(buffer, sizeof(buffer), "stcolor%d", pnum+1);
+            if(capturethechalice) // [SVE]: CTC
+            {
+                if(players[pnum].allegiance == CTC_TEAM_BLUE)
+                    strncpy(buffer, "stcolor8", sizeof(buffer));
+                else
+                    strncpy(buffer, "stcolor2", sizeof(buffer));
+            }
+            else
+                DEH_snprintf(buffer, sizeof(buffer), "stcolor%d", pnum+1);
             colpatch = W_CacheLumpName(buffer, PU_CACHE);
             V_DrawPatchDirect(158, y, colpatch);
             frags = ST_calcFrags(pnum);
             DEH_snprintf(buffer, sizeof(buffer), "%s%d", player_names[pnum], frags);
-            HUlib_drawYellowText(168, yt, buffer);
+            HUlib_drawYellowText(168, yt, buffer, false);
             if(!playeringame[pnum])
-                HUlib_drawYellowText(158, pnum*17 - 3, "X");
+                HUlib_drawYellowText(158, pnum*17 - 3, "X", false);
             y  += 17;
             yt += 17;
         }
@@ -1295,7 +1673,7 @@ static boolean ST_drawKeysPopup(void)
                     sprnames[states[info->spawnstate].sprite]);
                 patch = W_CacheLumpName(sprname, PU_CACHE);
                 V_DrawPatchDirect(x, y, patch);
-                HUlib_drawYellowText(x + ST_KEYNAME_X, y + ST_KEYNAME_Y, info->name);
+                HUlib_drawYellowText(x + ST_KEYNAME_X, y + ST_KEYNAME_Y, info->name, false);
             }
 
             if(keycount != ST_KEYS_NUMROWS)
@@ -1327,38 +1705,150 @@ boolean ST_DrawExternal(void)
         STlib_drawNumPositive(&w_health);
         STlib_drawNumPositive(&w_ready);
     }
-    else
+    else if(fullscreenhud) // [SVE]: allow disable
     {
         ammotype_t ammo;
 
+        // haleyjd 20140927: [SVE] Vastly improved for Veteran Edition.
+
+        // health
+        V_DrawPatch(3, 174, W_CacheLumpName("I_MDKT", PU_CACHE));
         ST_drawNumFontY2(15, 194, plyr->health);
+        
+        // armor
+        if(plyr->armortype == 2)
+            V_DrawPatch(33, 174, W_CacheLumpName("I_ARM1", PU_CACHE));
+        else
+            V_DrawPatch(33, 174, W_CacheLumpName("I_ARM2", PU_CACHE));
+        ST_drawNumFontY2(45, 194, plyr->armorpoints);
+
+        // current inventory item
+        if(plyr->numinventory && 
+           plyr->inventorycursor >= 0 && plyr->inventorycursor < NUMINVENTORY)
+        {
+            char iconname[9];
+            int  lumpnum;
+            inventory_t *inv = &plyr->inventory[plyr->inventorycursor];
+
+            DEH_snprintf(iconname, sizeof(iconname), "I_%s",
+                         DEH_String(sprnames[inv->sprite]));
+
+            if((lumpnum = W_CheckNumForName(iconname)) >= 0)
+            {
+                V_DrawPatch(267, 174, W_CacheLumpName(iconname, PU_CACHE));
+                ST_drawNumFontY2(280, 194, inv->amount);
+            }            
+        }
+
+        // [SVE] svillarreal - display inventory for full screen hud
+        if(st_invtics > 0)
+        {
+            int firstinventory, icon_x, i, numdrawn;
+            int numinventory = MIN(plyr->numinventory, 6);
+
+            if(plyr->inventorycursor >= 5)
+                firstinventory = plyr->inventorycursor - 4;
+            else
+                firstinventory = 0;
+
+            // Draw cursor.
+            if(plyr->numinventory)
+            {
+                V_DrawPatch(35 * (plyr->inventorycursor - firstinventory) + (139 - (16 * (numinventory-1))),
+                            160, invcursor);
+            }
+
+            // Draw inventory bar
+            for(icon_x = 144 - (16 * (numinventory-1)),
+                i = firstinventory,
+                numdrawn = 0; icon_x < (160 + (16 * (numinventory-1)));
+                icon_x += 35, i++, numdrawn++)
+            {
+                int lumpnum;
+                patch_t *patch;
+                char iconname[8];
+
+                if(numdrawn > 4)
+                    break;
+
+                if(plyr->numinventory <= numdrawn)
+                    break;
+                
+                DEH_snprintf(iconname, sizeof(iconname), "I_%s",
+                             DEH_String(sprnames[plyr->inventory[i].sprite]));
+
+                lumpnum = W_CheckNumForName(iconname);
+                if(lumpnum == -1)
+                    patch = W_CacheLumpName(DEH_String("STCFN063"), PU_CACHE);
+                else
+                    patch = W_CacheLumpNum(lumpnum, PU_STATIC);
+
+                if(i == plyr->inventorycursor && leveltime & 0x8)
+                {
+                    V_DrawXlaPatch(icon_x, 162, patch);
+                }
+                else
+                {
+                    V_DrawPatch(icon_x, 162, patch);
+                }
+                ST_drawNumFontY2(icon_x+20, 171, plyr->inventory[i].amount);
+            }
+        }
+        
+        // ammo
         ammo = weaponinfo[plyr->readyweapon].ammo;
         if (ammo != am_noammo)
+        {
+            int x = 297;
+            if(ammo == am_missiles)
+                x = 294;
+            V_DrawPatch(x, 174, invammo[ammo]);
             ST_drawNumFontY2(310, 194, plyr->ammo[ammo]);
-    }
+        }
 
-    if(!st_displaypopup)
-        return false;
+        // CTC team display
+        if(capturethechalice)
+        {
+            char *patch;
+            const char *teamName;
+            if(plyr->allegiance == CTC_TEAM_BLUE)
+            {
+                patch = "STCOLOR8";
+                teamName = "Blue Team";
+            }
+            else
+            {
+                patch = "STCOLOR2";
+                teamName = "Red Team";
+            }
+            V_DrawPatch(130, 191, W_CacheLumpName(patch, PU_CACHE));
+            HUlib_drawYellowText(140, 192, teamName, true);
+        }
+    }
 
     // villsa [STRIFE] added 20100926
     if(st_showobjective)
     {
-        V_DrawXlaPatch(0, 56, invpbak2);
-        V_DrawPatchDirect(0, 56, invpop2);
+        ST_DrawPopup2();
+
         M_DialogDimMsg(24, 74, mission_objective, true);
-        HUlib_drawYellowText(24, 74, mission_objective);
+        HUlib_drawYellowText(24, 74, mission_objective, false);
         ST_drawTime(210, 64, leveltime / TICRATE);
     }
     else
     {
         int keys = 0;
 
+        // [SVE] svillarreal - move this condition here due to bizarre
+        // issues with joystick input when pressing the objectives button
+        if(!st_displaypopup)
+            return false;
+
         // villsa [STRIFE] keys popup
         if(st_showkeys || st_popupdisplaytics)
             return ST_drawKeysPopup();
 
-        V_DrawXlaPatch(0, 56, invpbak);
-        V_DrawPatchDirect(0, 56, invpop);
+        ST_DrawPopup1();
 
         for(i = 0; i < NUMCARDS; i++)
         {
@@ -1481,6 +1971,13 @@ static void ST_loadUnloadGraphics(load_callback_t callback)
     callback(DEH_String("INVPBAK"),  &invpbak);
     callback(DEH_String("INVPBAK2"), &invpbak2);
     callback(DEH_String("INVCURS"),  &invcursor);
+
+    // [SVE] svillarreal - fullscreen variations
+    callback(DEH_String("INVPOPF1"), &invpopf1);
+    callback(DEH_String("INVPOPF2"), &invpopf2);
+    callback(DEH_String("INVBAKF1"), &invbakf1);
+    callback(DEH_String("INVBAKF2"), &invbakf2);
+
 }
 
 static void ST_loadCallback(char *lumpname, patch_t **variable)
@@ -1581,7 +2078,6 @@ void ST_createWidgets(void)
 
 static boolean	st_stopped = true;
 
-
 void ST_Start (void)
 {
     if (!st_stopped)
@@ -1605,6 +2101,9 @@ void ST_Stop (void)
 void ST_Init (void)
 {
     ST_loadData();
+    
+    // [SVE] svillarreal
+    ST_ClearDamageMarkers();
 
     // haleyjd 20100919: This is not used by Strife. More memory for voices!
     //st_backing_screen = (byte *) Z_Malloc(ST_WIDTH * ST_HEIGHT, PU_STATIC, 0);

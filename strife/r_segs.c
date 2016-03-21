@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -24,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "z_zone.h"
 #include "i_system.h"
 
 #include "doomdef.h"
@@ -391,8 +393,17 @@ R_StoreWallRange
     int			lightnum;
 
     // don't overflow and crash
-    if (ds_p == &drawsegs[MAXDRAWSEGS])
-	return;		
+    //if (ds_p == &drawsegs[MAXDRAWSEGS])
+    //    return;
+
+    // haleyjd 20140831: [SVE] remove drawsegs limit
+    if(ds_p == drawsegs + maxdrawsegs)
+    {
+        unsigned int newmax = maxdrawsegs ? maxdrawsegs*2 : MAXDRAWSEGS;
+        drawsegs = Z_Realloc(drawsegs, newmax * sizeof(*drawsegs), PU_STATIC, NULL);
+        ds_p = drawsegs + maxdrawsegs;
+        maxdrawsegs = newmax;
+    }
 		
 #ifdef RANGECHECK
     if (start >=viewwidth || start > stop)

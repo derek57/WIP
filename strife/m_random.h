@@ -23,17 +23,26 @@
 
 #include "doomtype.h"
 
-
-
 // Returns a number from 0 to 255,
 // from a lookup table.
 int M_Random (void);
 
+// DEBUG
+//#define M_RANDOM_LOG
+
+#ifdef M_RANDOM_LOG
+
+int (P_Random)(const char *filename, int line);
+#define P_Random() (P_Random)(__FILE__, __LINE__)
+
+#else
+
 // As M_Random, but used only by the play simulation.
 int P_Random (void);
 
+#endif
+
 // Fix randoms for demos.
 void M_ClearRandom (void);
-
 
 #endif

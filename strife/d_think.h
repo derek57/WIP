@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -60,7 +61,7 @@ typedef struct thinker_s
     struct thinker_s*	prev;
     struct thinker_s*	next;
     think_t		function;
-    
+    int                 references; // haleyjd 20140926: [SVE]
 } thinker_t;
 
 

@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -32,6 +33,7 @@
 #include "w_wad.h"
 
 #include "r_local.h"
+#include "r_main.h"
 
 #include "doomstat.h"
 
@@ -445,7 +447,12 @@ R_DrawVisSprite
             dc_translation = translationtables - 256 + (translation >> (MF_TRANSSHIFT - 8));
         }
     }
-    else if (translation)     // villsa [STRIFE] new translation tables
+    else if(vis->mobjflags & MF_MVIS)
+    {
+        // [STRIFE] 20141213: things that are *just* MF_MVIS are totally invisible.
+        return;
+    }
+    else if(translation)     // villsa [STRIFE] new translation tables
     {
         colfunc = transcolfunc;
         dc_translation = translationtables - 256 + (translation >> (MF_TRANSSHIFT - 8));
@@ -481,6 +488,21 @@ R_DrawVisSprite
     colfunc = basecolfunc;
 }
 
+void R_interpolateThingPosition(const mobj_t *thing, spritepos_t *pos)
+{
+    if(viewlerp == FRACUNIT)
+    {
+        pos->x = thing->x;
+        pos->y = thing->y;
+        pos->z = thing->z;
+    }
+    else
+    {
+        pos->x = R_LerpCoord(viewlerp, thing->prevpos.x, thing->x);
+        pos->y = R_LerpCoord(viewlerp, thing->prevpos.y, thing->y);
+        pos->z = R_LerpCoord(viewlerp, thing->prevpos.z, thing->z);
+    }
+}
 
 
 //
@@ -490,6 +512,7 @@ R_DrawVisSprite
 //
 void R_ProjectSprite (mobj_t* thing)
 {
+    spritepos_t         spritepos; // haleyjd
     fixed_t		tr_x;
     fixed_t		tr_y;
     
@@ -517,10 +540,13 @@ void R_ProjectSprite (mobj_t* thing)
     
     angle_t		ang;
     fixed_t		iscale;
+
+    // haleyjd 20140902: [SVE] interpolate thing positions
+    R_interpolateThingPosition(thing, &spritepos);
     
     // transform the origin point
-    tr_x = thing->x - viewx;
-    tr_y = thing->y - viewy;
+    tr_x = spritepos.x - viewx;
+    tr_y = spritepos.y - viewy;
 	
     gxt = FixedMul(tr_x,viewcos); 
     gyt = -FixedMul(tr_y,viewsin);
@@ -558,7 +584,7 @@ void R_ProjectSprite (mobj_t* thing)
     if (sprframe->rotate)
     {
 	// choose a different rotation based on player view
-	ang = R_PointToAngle (thing->x, thing->y);
+	ang = R_PointToAngle (spritepos.x, spritepos.y);
 	rot = (ang-thing->angle+(unsigned)(ANG45/2)*9)>>29;
 	lump = sprframe->lump[rot];
 	flip = (boolean)sprframe->flip[rot];
@@ -589,9 +615,9 @@ void R_ProjectSprite (mobj_t* thing)
     vis = R_NewVisSprite ();
     vis->mobjflags = thing->flags;
     vis->scale = xscale<<detailshift;
-    vis->gx = thing->x;
-    vis->gy = thing->y;
-    vis->gz = thing->z;
+    vis->gx = spritepos.x;
+    vis->gy = spritepos.y;
+    vis->gz = spritepos.z;
 
     // villsa [STRIFE]
     if(thing->flags & MF_FEETCLIPPED)
@@ -925,7 +951,9 @@ void R_DrawSprite (vissprite_t* spr)
     // Scan drawsegs from end to start for obscuring segs.
     // The first drawseg that has a greater scale
     //  is the clip seg.
-    for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+    // haleyjd 20140831: [SVE] remove undefined behavior
+    //for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+    for(ds = ds_p; ds-- > drawsegs; )
     {
 	// determine if the drawseg obscures the sprite
 	if (ds->x1 > spr->x2
@@ -1043,7 +1071,9 @@ void R_DrawMasked (void)
     }
     
     // render any remaining masked mid textures
-    for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+    // haleyjd 20140831: [SVE} remove undefined behavior
+    //for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+    for (ds = ds_p; ds-- > drawsegs; )
 	if (ds->maskedtexturecol)
 	    R_RenderMaskedSegRange (ds, ds->x1, ds->x2);
     
