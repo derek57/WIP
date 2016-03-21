@@ -2,6 +2,7 @@
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
 // Copyright(C) 2010 James Haley, Samuel Villarreal
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -41,6 +42,13 @@
 #include "r_state.h"
 
 #include "p_dialog.h" // [STRIFE]
+
+// [SVE] svillarreal
+#include "p_local.h"
+
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
 
 typedef enum
 {
@@ -196,6 +204,9 @@ void F_StartFinale (void)
 
     switch(gamemap)
     {
+    case 2:  // haleyjd 20140819: [SVE]
+        slideshow_state = SLIDE_EXITHACK;
+        break;
     case 3:  // Macil's exposition on the Programmer
         slideshow_state = SLIDE_PROGRAMMER1;
         break;
@@ -209,19 +220,44 @@ void F_StartFinale (void)
         if(!netgame)
         {
             if(players[0].health <= 0)            // Bad ending 
+            {
                 slideshow_state = SLIDE_BADEND1;  // - Humanity goes extinct
+
+                // [SVE] svillarreal - achievements
+#ifdef _USE_STEAM_
+                if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+                    I_SteamSetAchievement("SVE_ACH_DOOMED");
+#endif
+            }
             else
             {
                 if((players[0].questflags & QF_QUEST25) && // Converter destroyed
                    (players[0].questflags & QF_QUEST27))   // Computer destroyed (wtf?!)
                 {
                     // Good ending - You get the hot babe.
-                    slideshow_state = SLIDE_GOODEND1; 
+                    slideshow_state = SLIDE_GOODEND1;
+
+                    // [SVE] svillarreal - achievements
+#ifdef _USE_STEAM_
+                    if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+                    {
+                        I_SteamSetAchievement("SVE_ACH_GALIANT_HERO");
+
+                        if(gameskill == sk_nightmare)
+                            I_SteamSetAchievement("SVE_ACH_UNSTOPPABLE");
+                    }
+#endif
                 }
                 else
                 {
                     // Blah ending - You win the battle, but fail at life.
                     slideshow_state = SLIDE_BLAHEND1;
+
+                    // [SVE] svillarreal - achievements
+#ifdef _USE_STEAM_
+                    if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+                        I_SteamSetAchievement("SVE_ACH_WITHOUT_HOPE");
+#endif
                 }
             }
         }
@@ -237,6 +273,18 @@ void F_StartFinale (void)
         // that never got released?!
         if(gameversion == exe_strife_1_31 && isdemoversion)
             slideshow_state = SLIDE_DEMOEND1;
+
+        // [SVE] svillarreal - tourist achievement
+#ifdef _USE_STEAM_
+        if(!P_CheckPlayersCheating(ACH_ALLOW_SP))
+        {
+            I_SteamSetAchievement("SVE_ACH_DEMO");
+
+            // warmup achievement
+            if(gameskill == sk_nightmare && leveltime <= (6*60*TICRATE))
+                I_SteamSetAchievement("SVE_ACH_WARMUP");
+        }
+#endif
         break;
     }
 
@@ -433,7 +481,7 @@ static void F_DoSlideShow(void)
         finalecount = 0;
         finalestage = F_STAGE_ARTSCREEN;
         wipegamestate = -1;
-        S_StartMusic(mus_fast);
+        S_ChangeMusic(mus_fast, 1); // [SVE]: loop the ending music.
         // haleyjd 20130301: The ONLY glitch fixed in 1.31 of Strife
         // *would* be something this insignificant, of course!
         if(gameversion != exe_strife_1_31)
@@ -493,7 +541,10 @@ void F_Ticker (void)
     // advance animation
     finalecount++;
 
-    if (finalestage == F_STAGE_CAST)
+    if(!classicmode && finalestage == F_STAGE_ARTSCREEN)
+        return; // [SVE]: nothing else to do in artscreen
+
+    if(finalestage == F_STAGE_CAST)
         F_CastTicker ();
     else if(finalecount > slideshow_tics) // [STRIFE] Advance slideshow
         F_DoSlideShow();
@@ -602,28 +653,30 @@ typedef struct
 {
     int         isindemo; // [STRIFE] Changed from name, which is in mobjinfo
     mobjtype_t  type;
+    char       *name;
 } castinfo_t;
 
 // haleyjd: [STRIFE] A new cast order was defined, however it is unused in any
 // of the released versions of Strife, even including the demo version :(
-castinfo_t      castorder[] = {
-    { 1, MT_PLAYER     },
-    { 1, MT_BEGGAR1    },
-    { 1, MT_PEASANT2_A },
-    { 1, MT_REBEL1     },
-    { 1, MT_GUARD1     },
-    { 1, MT_CRUSADER   },
-    { 1, MT_RLEADER2   },
-    { 0, MT_SENTINEL   },
-    { 0, MT_STALKER    },
-    { 0, MT_PROGRAMMER },
-    { 0, MT_REAVER     },
-    { 0, MT_PGUARD     },
-    { 0, MT_INQUISITOR },
-    { 0, MT_PRIEST     },
-    { 0, MT_SPECTRE_A  },
-    { 0, MT_BISHOP     },
-    { 0, MT_ENTITY     },
+castinfo_t      castorder[] = 
+{
+    { 1, MT_PLAYER,     "THE MERCENARY"  },
+    { 1, MT_BEGGAR1,    "BEGGAR"         },
+    { 1, MT_PEASANT2_A, "PEASANT"        },
+    { 1, MT_REBEL1,     "REBEL"          },
+    { 1, MT_RLEADER2,   "MACIL"          },
+    { 1, MT_GUARD1,     "ACOLYTE"        },
+    { 1, MT_CRUSADER,   "CRUSADER"       },
+    { 0, MT_SENTINEL,   "SENTINEL"       },
+    { 0, MT_STALKER,    "STALKER"        },
+    { 0, MT_REAVER,     "REAVER"         },
+    { 0, MT_PGUARD,     "TEMPLAR"        },
+    { 0, MT_INQUISITOR, "INQUISITOR"     },
+    { 0, MT_PROGRAMMER, "THE PROGRAMMER" },
+    { 0, MT_BISHOP,     "THE BISHOP"     },
+    { 0, MT_PRIEST,     "THE LOREMASTER" },
+    { 0, MT_SPECTRE_A,  "SPECTRE"        },
+    { 0, MT_SUBENTITY,  "THE ONE GOD???" },
     { 1, NUMMOBJTYPES  }
 };
 
@@ -641,6 +694,7 @@ boolean		castattacking;
 // haleyjd 09/13/10: [STRIFE] Heavily modified, yet unused.
 // Evidence suggests this was meant to be started from a menu item.
 // See m_menu.c for more info.
+// [SVE]: completed.
 //
 void F_StartCast (void)
 {
@@ -660,6 +714,24 @@ void F_StartCast (void)
     castframes = 0;
     castonmelee = 0;
     castattacking = false;
+    S_ChangeMusic(mus_action, 1);
+    I_StartVoice(NULL); // sorry Macil, be quiet for a sec :P
+}
+
+//
+// haleyjd 20141116: [SVE] Don't go to weird gib states during the cast call.
+//
+static boolean F_IsWeirdGibState(int nextstate)
+{
+    switch(nextstate)
+    {
+    case S_RGIB_07: // MT_PLAYER
+    case S_GIBS_08: // MT_PEASANT2_A
+    case S_GIBS_20: // MT_GUARD1
+        return true;
+    default:
+        return false;
+    }
 }
 
 
@@ -671,15 +743,18 @@ void F_StartCast (void)
 // going to be seen, in part because I hope some Strife port or another will
 // pick it up and finish it, adding it as the optional menu item it was 
 // meant to be, or just adding it as part of the ending sequence.
+// [SVE]: ...and it's done ;)
 //
 void F_CastTicker (void)
 {
-    int         st;
+    int st;
+    int type;
 
     if (--casttics > 0)
         return;                  // not time to change state yet
 
-    if (caststate->tics == -1 || caststate->nextstate == S_NULL)
+    if (caststate->tics == -1 || caststate->nextstate == S_NULL ||
+        F_IsWeirdGibState(caststate->nextstate))
     {
         // switch from deathstate to next monster
         castnum++;
@@ -691,11 +766,24 @@ void F_CastTicker (void)
                 castnum = 0;
         }
         // [STRIFE] Break on type == NUMMOBJTYPES rather than name == NULL
-        if (castorder[castnum].type == NUMMOBJTYPES)
+        if(castorder[castnum].type == NUMMOBJTYPES)
             castnum = 0;
-        if (mobjinfo[castorder[castnum].type].seesound)
-            S_StartSound (NULL, mobjinfo[castorder[castnum].type].seesound);
-        caststate = &states[mobjinfo[castorder[castnum].type].seestate];
+        type = castorder[castnum].type;
+        if(mobjinfo[type].seesound && type != MT_PEASANT2_A && 
+            type != MT_REBEL1 && type != MT_RLEADER2)
+        {
+            S_StartSound(NULL, mobjinfo[castorder[castnum].type].seesound);
+        }
+        st = mobjinfo[castorder[castnum].type].seestate;
+
+        // see state hacks
+        switch(st)
+        {
+        case S_SPID_03: st = S_SPID_18; break;
+        default:
+            break;
+        }
+        caststate = &states[st];
         castframes = 0;
     }
     else
@@ -706,6 +794,19 @@ void F_CastTicker (void)
         if (caststate == &states[S_PLAY_05])    // villsa [STRIFE] - updated
             goto stopattack;	// Oh, gross hack!
         st = caststate->nextstate;
+
+        // next state hacks
+        switch(st)
+        {
+        case S_SPID_03: st = S_SPID_18; break;
+        case S_ROB2_11:
+            if(castonmelee)
+                st = S_ROB2_01;
+            break;
+        default:
+            break;
+        }
+
         caststate = &states[st];
         castframes++;
 
@@ -720,6 +821,57 @@ void F_CastTicker (void)
         else
             sfx = mobjinfo[castorder[castnum].type].attacksound;
 
+        // sound hacks
+        switch(st)
+        {
+        case S_PEAS_10: sfx = sfx_meatht; break;
+        case S_HMN1_20: 
+        case S_HMN1_21: 
+        case S_LEAD_13:
+        case S_LEAD_18:
+        case S_AGRD_18:
+        case S_AGRD_19:
+        case S_AGRD_20: sfx = sfx_rifle;  break;
+        case S_ROB1_11: sfx = sfx_revbld; break;
+        case S_ROB1_14: sfx = sfx_reavat; break;
+        case S_PGRD_13: sfx = sfx_revbld; break;
+        case S_PGRD_15: sfx = sfx_pgrdat; break;
+        case S_ROB2_10:
+            if(castonmelee)
+            {
+                sfx = sfx_rlaunc;
+                break;
+            }
+            // fall-through
+        case S_ROB2_11:
+        case S_ROB2_12:
+        case S_ROB2_13:
+        case S_ROB2_14:
+        case S_ROB2_15:
+        case S_ROB2_16:
+        case S_ROB2_17: sfx = sfx_flburn; break;
+        case S_MLDR_10: sfx = sfx_rlaunc; break;
+        case S_PRST_11: sfx = sfx_revbld; break;
+        case S_PRST_14: sfx = sfx_chain;  break;
+        case S_ALN1_14: sfx = sfx_revbld; break;
+        case S_ALN1_17: sfx = sfx_sglhit; break;
+        case S_MNAL_35: sfx = sfx_revbld; break;
+        case S_MNAL_38: sfx = sfx_sglhit; break;
+        case S_SEWR_04: sfx = sfx_plasma; break;
+        case S_SPID_10: sfx = sfx_spdatk; break;
+        case S_SPID_18:
+        case S_SPID_22: sfx = sfx_spdwlk; break;
+        case S_ROB3_02:
+        case S_ROB3_08: sfx = sfx_inqact; break;
+        case S_ROB3_12: sfx = sfx_reavat; break;
+        case S_ROB3_15: sfx = sfx_phoot;  break;
+        case S_PRGR_03: sfx = sfx_progac; break;
+        case S_PRGR_13: sfx = sfx_revbld; break;
+        case S_PRGR_17: sfx = sfx_sglhit; break;
+        default:
+            break;
+        }
+
         if (sfx)
             S_StartSound (NULL, sfx);
     }
@@ -729,9 +881,14 @@ void F_CastTicker (void)
         // go into attack frame
         castattacking = true;
         if (castonmelee)
-            caststate=&states[mobjinfo[castorder[castnum].type].meleestate];
+        {
+            if(castorder[castnum].type == MT_INQUISITOR)
+                caststate = &states[S_ROB3_14];
+            else
+                caststate = &states[mobjinfo[castorder[castnum].type].meleestate];
+        }
         else
-            caststate=&states[mobjinfo[castorder[castnum].type].missilestate];
+            caststate = &states[mobjinfo[castorder[castnum].type].missilestate];
         castonmelee ^= 1;
         if (caststate == &states[S_NULL])
         {
@@ -751,10 +908,17 @@ stopattack:
             castattacking = false;
             castframes = 0;
             caststate = &states[mobjinfo[castorder[castnum].type].seestate];
+            if(caststate == &states[S_SPID_03])
+                caststate = &states[S_SPID_18];
+            if(caststate == &states[S_PRGR_02])
+                caststate = &states[S_PRGR_06];
         }
     }
 
-    casttics = caststate->tics;
+    if(caststate == &states[S_MLDR_27])
+        casttics = 30;
+    else
+        casttics = caststate->tics;
     if (casttics > 50) // [STRIFE] Cap tics
         casttics = 50;
     else if (casttics == -1)
@@ -803,83 +967,91 @@ void F_CastPrint (char* text)
     int		cx;
     int		w;
     int		width;
-    
+
     // find width
     ch = text;
     width = 0;
-	
+
     while (ch)
     {
-	c = *ch++;
-	if (!c)
-	    break;
-	c = toupper(c) - HU_FONTSTART;
-	if (c < 0 || c> HU_FONTSIZE)
-	{
-	    width += 4;
-	    continue;
-	}
-		
-	w = SHORT (hu_font[c]->width);
-	width += w;
+        c = *ch++;
+        if (!c)
+            break;
+        c = toupper(c) - HU_FONTSTART;
+        if (c < 0 || c> HU_FONTSIZE)
+        {
+            width += 4;
+            continue;
+        }
+
+        w = SHORT (hu_font[c]->width);
+        width += w;
     }
-    
+
     // draw it
     cx = 160-width/2;
     ch = text;
     while (ch)
     {
-	c = *ch++;
-	if (!c)
-	    break;
-	c = toupper(c) - HU_FONTSTART;
-	if (c < 0 || c> HU_FONTSIZE)
-	{
-	    cx += 4;
-	    continue;
-	}
-		
-	w = SHORT (hu_font[c]->width);
-	V_DrawPatch(cx, 180, hu_font[c]);
-	cx+=w;
+        c = *ch++;
+        if (!c)
+            break;
+        c = toupper(c) - HU_FONTSTART;
+        if (c < 0 || c > HU_FONTSIZE || c == '_') // [SVE]
+        {
+            cx += 4;
+            continue;
+        }
+
+        w = SHORT(hu_font[c]->width);
+        V_DrawPatch(cx, 180, hu_font[c]);
+        cx+=w;
     }
-	
+
 }
 
 // haleyjd 09/13/10: [STRIFE] Unfortunately they removed whatever was
 // partway finished of this function from the binary, as there is no
 // trace of it. This means we cannot know for sure what the cast call
 // would have looked like. :(
-/*
+
 //
 // F_CastDrawer
 //
 void F_CastDrawer (void)
 {
-    spritedef_t*	sprdef;
-    spriteframe_t*	sprframe;
-    int			lump;
-    boolean		flip;
-    patch_t*		patch;
+    spritedef_t   *sprdef;
+    spriteframe_t *sprframe;
+    int            lump;
+    boolean        flip;
+    patch_t       *patch;
+    int           x = 160, y = 170;
     
     // erase the entire screen to a background
-    V_DrawPatch (0, 0, W_CacheLumpName (DEH_String("BOSSBACK"), PU_CACHE));
+    V_DrawPatch(0, 0, W_CacheLumpName(DEH_String("HELP0"), PU_CACHE));
 
-    F_CastPrint (DEH_String(castorder[castnum].name));
-    
     // draw the current frame in the middle of the screen
     sprdef = &sprites[caststate->sprite];
-    sprframe = &sprdef->spriteframes[ caststate->frame & FF_FRAMEMASK];
+    sprframe = &sprdef->spriteframes[caststate->frame & FF_FRAMEMASK];
     lump = sprframe->lump[0];
     flip = (boolean)sprframe->flip[0];
-			
-    patch = W_CacheLumpNum (lump+firstspritelump, PU_CACHE);
-    if (flip)
-	V_DrawPatchFlipped(160, 170, patch);
+
+    if(castorder[castnum].type == MT_SUBENTITY && !castdeath)
+        y = 196;
+
+    patch = W_CacheLumpNum(lump+firstspritelump, PU_CACHE);
+    if(flip)
+        V_DrawPatchFlipped(x, y, patch);
     else
-	V_DrawPatch(160, 170, patch);
+        V_DrawPatch(x, y, patch);
+
+    // title
+    V_WriteBigText("Cast of Characters", 
+                   160 - V_BigFontStringWidth("Cast of Characters")/2, 8);
+
+    // name
+    F_CastPrint(DEH_String(castorder[castnum].name));
 }
-*/
 
 #ifdef STRIFE_DEMO_CODE
 //
@@ -929,43 +1101,11 @@ F_DrawPatchCol
 // I have implemented both code segments, though only the black screen
 // one will currently be used, as full demo version support isn't looking
 // likely right now.
+// [SVE] 20140906: Reimplemented to draw DENDBACK lump.
 //
 void F_DrawMap34End (void)
 {
-    signed int  scrolled;
-    int         x;
-    patch_t*    p1;
-    patch_t*    p2;
-
-    p1 = W_CacheLumpName (DEH_String("credit"),  PU_LEVEL);
-    p2 = W_CacheLumpName (DEH_String("vellogo"), PU_LEVEL);
-
-    V_MarkRect (0, 0, SCREENWIDTH, SCREENHEIGHT);
-
-
-    scrolled = (320 - ((signed int) finalecount-430)/2);
-    if (scrolled > 320)
-        scrolled = 320;
-    if (scrolled < 0)
-        scrolled = 0;
-
-#ifdef STRIFE_DEMO_CODE
-    for ( x=0 ; x<SCREENWIDTH ; x++)
-    {
-        if (x+scrolled < 320)
-            F_DrawPatchCol (x, p1, x+scrolled);
-        else
-            F_DrawPatchCol (x, p2, x+scrolled - 320);
-    }
-#else
-    // wtf this is supposed to do, I have no idea!
-    x = 1;
-    do
-    {
-        x += 11;
-    }
-    while(x < 320);
-#endif
+    V_DrawPatch(0, 0, W_CacheLumpName("DENDBACK", PU_CACHE));
 }
 
 // haleyjd 09/13/10: [STRIFE] Unused.
@@ -1021,7 +1161,8 @@ void F_Drawer (void)
     {
     case F_STAGE_CAST:
         // Cast didn't have a drawer in any released version
-        //F_CastDrawer();
+        // [SVE]: Until now!
+        F_CastDrawer();
         break;
     case F_STAGE_TEXT:
         // Draw slideshow panel

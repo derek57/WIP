@@ -30,6 +30,10 @@
 
 #include "f_wipe.h"
 
+// [SVE] svillarreal
+#include "rb_wipe.h"
+#include "doomstat.h"
+
 //
 //                       SCREEN WIPE PACKAGE
 //
@@ -52,6 +56,12 @@ wipe_shittyColMajorXform
     int		y;
     short*	dest;
 
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return;
+    }
+
     dest = (short*) Z_Malloc(width*height*2, PU_STATIC, 0);
 
     for(y=0;y<height;y++)
@@ -71,6 +81,13 @@ wipe_initColorXForm
   int	height,
   int	ticks )
 {
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_StartDestWipe();
+        return 0;
+    }
+
     memcpy(wipe_scr, wipe_scr_start, width*height);
     return 0;
 }
@@ -94,6 +111,12 @@ wipe_doColorXForm
     int   i;
     boolean changed = false;
 
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return RB_DrawWipe();
+    }
+
     for(i = pix; i > 0; i--)
     {
         if(*cur_screen != *end_screen)
@@ -115,6 +138,11 @@ wipe_exitColorXForm
   int	height,
   int	ticks )
 {
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_EndWipe();
+    }
     return 0;
 }
 
@@ -128,6 +156,12 @@ wipe_initMelt
   int	ticks )
 {
     int i, r;
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return 0;
+    }
     
     // copy start screen to main screen
     memcpy(wipe_scr, wipe_scr_start, width*height);
@@ -166,6 +200,12 @@ wipe_doMelt
     short*	s;
     short*	d;
     boolean	done = true;
+
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return true;
+    }
 
     width/=2;
 
@@ -213,6 +253,12 @@ wipe_exitMelt
   int	height,
   int	ticks )
 {
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return 0;
+    }
+
     Z_Free(y);
     Z_Free(wipe_scr_start);
     Z_Free(wipe_scr_end);
@@ -227,6 +273,13 @@ wipe_StartScreen
   int	width,
   int	height )
 {
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        RB_StartWipe();
+        return 0;
+    }
+
     wipe_scr_start = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
     I_ReadScreen(wipe_scr_start);
     return 0;
@@ -240,6 +293,12 @@ wipe_EndScreen
   int	width,
   int	height )
 {
+    // [SVE] svillarreal
+    if(use3drenderer)
+    {
+        return 0;
+    }
+
     wipe_scr_end = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
     I_ReadScreen(wipe_scr_end);
     V_DrawBlock(x, y, width, height, wipe_scr_start); // restore start scr.
@@ -259,32 +318,36 @@ wipe_ScreenWipe
     int rc;
     static int (*wipes[])(int, int, int) =
     {
-	wipe_initColorXForm, wipe_doColorXForm, wipe_exitColorXForm,
-	wipe_initMelt, wipe_doMelt, wipe_exitMelt
+	    wipe_initColorXForm, wipe_doColorXForm, wipe_exitColorXForm,
+	    wipe_initMelt, wipe_doMelt, wipe_exitMelt
     };
 
     // initial stuff
-    if (!go)
+    if(!go)
     {
-	go = 1;
-        // haleyjd 20110629 [STRIFE]: We *must* use a temp buffer here.
-	wipe_scr = (byte *) Z_Malloc(width*height, PU_STATIC, 0); // DEBUG
-	//wipe_scr = I_VideoBuffer;
-	(*wipes[wipeno*3])(width, height, ticks);
+	    go = 1;
+            // haleyjd 20110629 [STRIFE]: We *must* use a temp buffer here.
+	    wipe_scr = (byte *) Z_Malloc(width*height, PU_STATIC, 0); // DEBUG
+	    //wipe_scr = I_VideoBuffer;
+	    (*wipes[wipeno*3])(width, height, ticks);
     }
 
     // do a piece of wipe-in
     V_MarkRect(0, 0, width, height);
     rc = (*wipes[wipeno*3+1])(width, height, ticks);
 
-    // haleyjd 20110629 [STRIFE]: Copy temp buffer to the real screen.
-    V_DrawBlock(x, y, width, height, wipe_scr);
+    // [SVE] svillarreal
+    if(!use3drenderer)
+    {
+        // haleyjd 20110629 [STRIFE]: Copy temp buffer to the real screen.
+        V_DrawBlock(x, y, width, height, wipe_scr);
+    }
 
     // final stuff
-    if (rc)
+    if(rc)
     {
-	go = 0;
-	(*wipes[wipeno*3+2])(width, height, ticks);
+	    go = 0;
+	    (*wipes[wipeno*3+2])(width, height, ticks);
     }
 
     return !go;

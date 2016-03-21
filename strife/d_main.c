@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -19,11 +20,12 @@
 //	and call the startup functions.
 //
 
-
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "rb_local.h"
 
 #include "config.h"
 #include "deh_main.h"
@@ -38,12 +40,15 @@
 
 #include "z_zone.h"
 #include "w_main.h"
+#include "w_merge.h"
 #include "w_wad.h"
 #include "s_sound.h"
 #include "v_video.h"
 
 #include "f_finale.h"
 #include "f_wipe.h"
+
+#include "fe_frontend.h"  // haleyjd [SVE]
 
 #include "m_argv.h"
 #include "m_config.h"
@@ -76,6 +81,16 @@
 
 #include "d_main.h"
 
+// [SVE] svillarreal
+#include "rb_config.h"
+#include "m_qstring.h"
+#include "i_ffmpeg.h"
+
+// haleyjd 20140821: [SVE] debug console
+#if defined(_WIN32) && defined(_DEBUG)
+void I_W32_DebugConsole(void);
+#endif
+
 //
 // D-DoomLoop()
 // Not a globally visible function,
@@ -104,6 +119,10 @@ boolean         respawnparm;    // checkparm of -respawn
 boolean         fastparm;       // checkparm of -fast
 boolean         flipparm;       // [STRIFE] haleyjd 20110629: checkparm of -flip
 boolean         randomparm;     // [STRIFE] haleyjd 20130915: checkparm of -random
+
+// haleyjd [SVE]: remember starting state of these options
+boolean         start_fastparm;
+boolean         start_respawnparm;
 
 boolean         showintro = true;   // [STRIFE] checkparm of -nograph, disables intro
 
@@ -140,7 +159,7 @@ boolean         isdemoversion;
 char		wadfile[1024];          // primary wad file
 char		mapdir[1024];           // directory of development maps
 
-int             show_endoom = 1;
+int             show_endoom = 0;
 int             graphical_startup = 1;
 
 // If true, startup has completed and the main game loop has started.
@@ -152,8 +171,10 @@ static boolean main_loop_started = false;
 
 static int comport = 0;
 
+#ifndef _USE_STEAM_
 // fraggle 06/03/11 [STRIFE]: Multiplayer nickname?
 char *nickname = NULL;
+#endif
 
 void D_ConnectNetGame(void);
 void D_CheckNetGame(void);
@@ -166,6 +187,21 @@ void D_CheckNetGame(void);
 void D_ProcessEvents (void)
 {
     event_t*    ev;
+
+    // [SVE] svillarreal - we don't want any unwanted inputs to occur before
+    // the game even starts/loads
+    if(main_loop_started == false)
+    {
+        return;
+    }
+
+    // [SVE]: if in the in-game options menu, do not process input here
+    if(FE_InOptionsMenu())
+    {
+        // clear out any queued events
+        while((ev = D_PopEvent()) != NULL);
+        return;
+    }
 
     // haleyjd 08/22/2010: [STRIFE] there is no such thing as a "store demo" 
     // version of Strife
@@ -221,6 +257,17 @@ void D_Display (void)
     if (nodrawers)
         return;                    // for comparative timing / profiling
 
+    // haleyjd 20140902: [SVE] interpolation
+    I_TimerStartDisplay();
+
+    // [SVE]: if running in-game options menu, call its drawer.
+    if(FE_InOptionsMenu())
+    {
+        FE_InGameOptionsDrawer();
+        I_TimerEndDisplay();
+        return;
+    }
+
     redrawsbar = false;
     
     // change the view size if needed
@@ -239,6 +286,13 @@ void D_Display (void)
     }
     else
         wipe = false;
+
+    // haleyjd: [SVE]
+    if(use3drenderer && gamestate != GS_LEVEL)
+    {
+        dglClearColor(0, 0, 0, 1);
+        RB_ClearBuffer(GLCB_COLOR);
+    }
 
     if (gamestate == GS_LEVEL && gametic)
         HU_Erase();
@@ -261,11 +315,10 @@ void D_Display (void)
         break;
       
      // haleyjd 08/23/2010: [STRIFE] No intermission
-     /*
+     // haleyjd 20140921: [SVE] For Capture the Chalice
      case GS_INTERMISSION:
-         WI_Drawer ();
+         WI_Drawer();
          break;
-     */
 
     case GS_FINALE:
         F_Drawer ();
@@ -359,6 +412,7 @@ void D_Display (void)
     if (!wipe)
     {
         I_FinishUpdate ();              // page flip or blit buffer
+        I_TimerEndDisplay();
         return;
     }
     
@@ -384,6 +438,8 @@ void D_Display (void)
         M_Drawer ();                            // menu is drawn even on top of wipes
         I_FinishUpdate ();                      // page flip or blit buffer
     } while (!done);
+
+    I_TimerEndDisplay();
 }
 
 //
@@ -406,6 +462,9 @@ void D_BindVariables(void)
     M_BindMenuControls();
     M_BindStrifeControls(); // haleyjd 09/01/10: [STRIFE]
     M_BindChatControls(MAXPLAYERS);
+
+    // [SVE] svillarreal - bind variables for hardware renderer
+    RB_BindVariables();
 
     // haleyjd 20130915: Strife chat keys
     key_multi_msgplayer[0] = '1';
@@ -431,7 +490,8 @@ void D_BindVariables(void)
     // * screenblocks -> screensize
     // * Added nickname, comport
 
-    M_BindVariable("mouse_sensitivity",      &mouseSensitivity);
+    M_BindVariable("mouse_sensitivity_X",    &mouseSensitivityX);
+    M_BindVariable("mouse_sensitivity_Y",    &mouseSensitivityY);
     M_BindVariable("sfx_volume",             &sfxVolume);
     M_BindVariable("music_volume",           &musicVolume);
     M_BindVariable("voice_volume",           &voiceVolume); 
@@ -443,8 +503,19 @@ void D_BindVariables(void)
     M_BindVariable("show_endoom",            &show_endoom);
     M_BindVariable("back_flat",              &back_flat);
     M_BindVariable("graphical_startup",      &graphical_startup);
+    M_BindVariable("interpolate_frames",     &d_interpolate);
+    M_BindVariable("skip_movies",            &d_skipmovies);
+    M_BindVariable("max_gore",               &d_maxgore);
+    M_BindVariable("classicmode",            &classicmode);
+    M_BindVariable("weapon_recoil",          &d_recoil);
+    M_BindVariable("damage_indicator",       &d_dmgindictor);
+    M_BindVariable("autoaim",                &autoaim);
+    M_BindVariable("autorun",                &autorun);
+    M_BindVariable("fullscreen_hud",         &fullscreenhud);
 
+#ifndef _USE_STEAM_
     M_BindVariable("nickname",               &nickname);
+#endif
     M_BindVariable("comport",                &comport);
 
     // Multiplayer chat macros
@@ -456,6 +527,17 @@ void D_BindVariables(void)
         M_snprintf(buf, sizeof(buf), "chatmacro%i", i);
         M_BindVariable(buf, &chat_macros[i]);
     }
+
+    // [SVE]: bind unsaved runtime-only vars
+    M_BindVariable("deathmatch",  &deathmatch);
+    M_BindVariable("fastparm",    &fastparm);
+    M_BindVariable("nomonsters",  &nomonsters);
+    M_BindVariable("randomparm",  &randomparm);
+    M_BindVariable("respawnparm", &respawnparm);
+    M_BindVariable("startmap",    &startmap);
+    M_BindVariable("startskill",  &startskill);
+    M_BindVariable("timelimit",   &timelimit);
+    M_BindVariable("d_fpslimit",  &d_fpslimit);
 }
 
 //
@@ -472,7 +554,6 @@ boolean D_GrabMouseCallback(void)
         return false;
 
     // when menu is active or game is paused, release the mouse.
-
     if (menuactive || paused)
         return false;
 
@@ -489,6 +570,56 @@ static boolean D_StartupGrabCallback(void)
 }
 
 //
+// haleyjd 20141007: [SVE] Added mechanism to tell the low level code when and
+// when not to warp the mouse to the lower right corner when releasing it. For
+// our purposes, that's when the menus are active.
+//
+static boolean D_WarpMouseCallback(void)
+{
+    return !(menuactive || FE_InFrontend());
+}
+
+static int d_ticcount;
+boolean    d_fpslimit = false;
+
+//
+// D_updateTics
+//
+// haleyjd 20140925: [SVE]
+// Update timing information
+//
+static void D_updateTics(void)
+{
+    d_ticcount = I_GetTimeMS();
+}
+
+//
+// D_capFrameRate
+//
+// haleyjd 20140904: [SVE]
+// Choco's sound engine won't tolerate the main loop running at full blast 
+// and turns into chop city. We must give up a non-trivial amount of CPU
+// time on a consistent basis.
+//
+static boolean D_capFrameRate(void)
+{
+    float frameMillis = 1000.0f / 60.0f;
+    int   curTics = I_GetTimeMS();
+    float elapsed = (float)(curTics - d_ticcount);
+    
+    if(elapsed < frameMillis)
+    {
+        if(frameMillis - elapsed > 3.0f)
+            I_Sleep(2);
+        return true;
+    }
+
+    return false;
+}
+
+static boolean dofrontend = true;
+
+//
 //  D_DoomLoop
 //
 //  haleyjd 08/23/10: [STRIFE] Verified unmodified.
@@ -498,11 +629,9 @@ void D_DoomLoop (void)
     if (demorecording)
         G_BeginRecording ();
 
-    main_loop_started = true;
-
     TryRunTics();
 
-    if (!showintro)
+    if(!showintro && !dofrontend) // [SVE]
     {
         I_SetWindowTitle(gamedescription);
         I_InitGraphics();
@@ -510,6 +639,7 @@ void D_DoomLoop (void)
 
     I_EnableLoadingDisk();
     I_SetGrabMouseCallback(D_GrabMouseCallback);
+    I_SetWarpMouseCallback(D_WarpMouseCallback);
 
     V_RestoreBuffer();
     R_ExecuteSetViewSize();
@@ -521,19 +651,31 @@ void D_DoomLoop (void)
         wipegamestate = gamestate;
     }
 
+    // haleyjd: [SVE]
+    if (autostart)
+        main_loop_started = true;
+
     while (1)
     {
+        D_updateTics();
+
         // frame syncronous IO operations
-        I_StartFrame ();
+        I_StartFrame();
 
         // process one or more tics
-        TryRunTics (); // will run at least one tic
+        TryRunTics(); // will run at least one tic
 
-        S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
+        S_UpdateSounds(players[consoleplayer].mo);// move positional sounds
 
         // Update display, next frame, with current state.
-        if (screenvisible)
-            D_Display ();
+        if(screenvisible)
+            D_Display();
+
+        // Must cap framerate if interpolating
+        if(d_interpolate && d_fpslimit)
+        {
+            while(D_capFrameRate());
+        }
     }
 }
 
@@ -546,6 +688,23 @@ int             demosequence;
 int             pagetic;
 char                    *pagename;
 
+// From the original instruction manual:
+static char storytext[] =
+   "You are a wandering mercenary led to the small "
+   "town of Tarnhill by rumors of conflict between "
+   "the Order, a well-equipped religious monarchy, "
+   "and the Front, the rag tag resistance movement.  "
+   "While searching for the Front you decided to take "
+   "a brief rest somewhere that you thought was safe.  "
+   "The Order's Acolytes have been rounding up all "
+   "suspicious characters in the area.    \n"
+   "Yes, you happen to be one of them.    \n"
+   "What they didn't expect, though, is the knife you "
+   "keep concealed for situations just like this one... ";
+
+#define TEXTSPEED 3
+static int storycount;
+
 
 //
 // D_PageTicker
@@ -557,9 +716,52 @@ void D_PageTicker (void)
 {
     if (--pagetic < 0)
         D_AdvanceDemo ();
+
+    if(!strcmp(pagename, "STRBACK"))
+        ++storycount;
 }
 
+//
+// D_TextWrite
+//
+// haleyjd 20141027: [SVE] Do backstory text
+//
+static void D_TextWrite(void)
+{
+    int       count;
+    size_t    len;
+    int       cx;
+    int       cy;
+    qstring_t text;
+    static boolean formatted = false;
 
+    if(!formatted)
+    {
+        M_DialogDimMsg(10, 30, storytext, false);
+        formatted = true;
+    }
+
+    QStrInitCreate(&text);
+
+    // title
+    V_WriteBigText("The Story So Far...", 10, 6);
+
+    cx = 10;
+    cy = 30;
+
+    QStrCopy(&text, storytext);
+    count = (storycount - 10) / TEXTSPEED;
+    if(count < 0)
+        count = 0;
+    len = (size_t)count;
+
+    if(len < QStrLen(&text))
+        QStrTruncate(&text, len);
+    
+    M_WriteText(cx, cy, QStrConstPtr(&text));
+
+    QStrFree(&text);
+}
 
 //
 // D_PageDrawer
@@ -569,6 +771,9 @@ void D_PageTicker (void)
 void D_PageDrawer (void)
 {
     V_DrawPatch (0, 0, W_CacheLumpName(pagename, PU_CACHE));
+
+    if(!strcmp(pagename, "STRBACK"))
+        D_TextWrite();
 }
 
 
@@ -583,6 +788,8 @@ void D_AdvanceDemo (void)
     advancedemo = true;
 }
 
+// haleyjd 20140904: [SVE] part of fix for QFMRM7
+static int quittics;
 
 //
 // This cycles through the demo sequences.
@@ -597,6 +804,9 @@ void D_DoAdvanceDemo (void)
     usergame = false;               // no save / end game here
     paused = false;
     gameaction = ga_nothing;
+
+    // [SVE] svillarreal - moved here
+    main_loop_started = true;
     
     // villsa 09/12/10: [STRIFE] converted pagetics to ticrate
     switch (demosequence)
@@ -606,7 +816,7 @@ void D_DoAdvanceDemo (void)
         return;
     case -4: // show exit screen
         menuactive = false;
-        pagetic = 3*TICRATE;
+        pagetic = quittics;
         gamestate = GS_DEMOSCREEN;
         pagename = DEH_String("PANEL7");
         S_StartMusic(mus_fast);
@@ -685,9 +895,17 @@ void D_DoAdvanceDemo (void)
         wipegamestate = -1;
         break;
     case 8: // demo
+        // [SVE]
+        storycount = 0;
+        S_ChangeMusic(mus_dark, 1);
+        pagename = "STRBACK";
+        pagetic = 58*TICRATE;
+        wipegamestate = -1;
+        /*
         ClearTmp();
         pagetic = 9*TICRATE;
         G_DeferedPlayDemo(DEH_String("demo1"));
+        */
         break;
     case 9: // velocity logo? - unused...
         pagetic = 6*TICRATE;
@@ -735,11 +953,13 @@ void D_StartTitle (void)
 // [STRIFE] New function
 // haleyjd 09/11/10: Sets up the quit game snippet powered by the
 // demo sequence.
+// haleyjd 20140904: [SVE] added tics param to fix QFMRM7
 //
-void D_QuitGame(void)
+void D_QuitGame(int tics)
 {
     gameaction = ga_nothing;
     demosequence = -4;
+    quittics = tics; // [SVE] set quittics
     D_AdvanceDemo();
 }
 
@@ -803,9 +1023,48 @@ static char *GetGameName(char *gamename)
 }
 
 //
+// D_loadResourceWad
+//
+// haleyjd 20140821: [SVE] Broke out of D_IdentifyVersion to support loading
+// multiple wad files.
+//
+static char *D_loadResourceWad(char *filename)
+{
+    // try to find on WAD paths first
+    char *name = D_FindWADByName(filename);
+
+    if(!name) // not found?
+    {
+        int p;
+
+        // If -iwad was used, check and see if exists on the same filepath.
+        if((p = M_CheckParm("-iwad")) && p < myargc - 1)
+        {
+            char   *iwad     = myargv[p + 1];
+            size_t  len      = strlen(iwad) + 1;
+            char   *iwadpath = Z_Malloc(len, PU_STATIC, NULL);
+
+            // extract base path of IWAD parameter
+            M_GetFilePath(iwad, iwadpath, len);
+
+            // concatenate with filename
+            name = M_SafeFilePath(iwadpath, filename);
+            Z_Free(iwadpath);
+
+            if(!M_FileExists(name))
+            {
+                Z_Free(name);
+                name = NULL;
+            }
+        }
+    }
+
+    return name;
+}
+
+//
 // Find out what version of Doom is playing.
 //
-
 void D_IdentifyVersion(void)
 {
     // gamemission is set up by the D_FindIWAD function.  But if 
@@ -824,52 +1083,28 @@ void D_IdentifyVersion(void)
     gamemission = strife;
     isregistered = true;
 
-    // Load voices.wad 
     if(isregistered)
     {
-        char *name = D_FindWADByName("voices.wad");
-
-        if(!name) // not found?
-        {
-            int p;
-
-            // haleyjd STRIFE-FIXME: Temporary?
-            // If -iwad was used, check and see if voices.wad exists on the
-            // same filepath.
-            if((p = M_CheckParm("-iwad")) && p < myargc - 1)
-            {
-                char   *iwad     = myargv[p + 1];
-                size_t  len      = strlen(iwad) + 1;
-                char   *iwadpath = Z_Malloc(len, PU_STATIC, NULL);
-                char   *voiceswad;
-                
-                // extract base path of IWAD parameter
-                M_GetFilePath(iwad, iwadpath, len);
-                
-                // concatenate with /voices.wad
-                voiceswad = M_SafeFilePath(iwadpath, "voices.wad");
-                Z_Free(iwadpath);
-
-                if(!M_FileExists(voiceswad))
-                {
-                    disable_voices = 1;
-                    Z_Free(voiceswad);
-                }
-                else
-                    name = voiceswad; // STRIFE-FIXME: memory leak!!
-            }
-            else
-                disable_voices = 1;
-        }
+        char *name;
+        
+        // Load voices.wad 
+        if(!(name = D_loadResourceWad("voices.wad")))
+            disable_voices = 1;
 
         if(disable_voices) // voices disabled?
         {
             if(devparm)
                  printf("Voices disabled\n");
-            return;
         }
+        else
+            D_AddFile(name);
 
-        D_AddFile(name);
+        // [SVE] load resource wad with new SVE stuff
+        if(!(name = D_loadResourceWad("SVE.wad")))
+            I_Error("D_IdentifyVersion: Cannot find SVE.wad file");
+
+        printf(" adding %s\n", name);
+        W_MergeFile(name);
     }
 }
 
@@ -1108,6 +1343,70 @@ static void D_InitChocoStrife(void)
     V_SetPatchClipCallback(D_PatchClipCallback);
 }
 
+//
+// haleyjd 20141002: [SVE] Graphical frontend
+//
+
+static void D_InitFrontend()
+{
+    // several command line parameters disable the frontend:
+    if(M_CheckParm("-nofrontend")    || // intentional skip
+       M_CheckParm("-devparm")       || // dev mode
+       M_CheckParm("-warp")          || // warping
+       M_CheckParm("-playdemo")      || // play demo
+       M_CheckParm("-record")        || // record demo
+       M_CheckParm("-server")        || // UDP server modes
+       M_CheckParm("-privateserver") ||
+       M_CheckParm("-autojoin")      || // UDP client modes
+       M_CheckParm("-connect")       ||
+       M_CheckParm("-drone")         ||
+       M_CheckParm("-solo-net"))
+    {
+        dofrontend = false;
+    }
+
+    // init graphics
+    I_GraphicsCheckCommandLine();
+
+    if(dofrontend)
+    {
+        I_SetWindowTitle(gamedescription);
+        I_SetGrabMouseCallback(D_StartupGrabCallback);
+        I_SetWarpMouseCallback(D_WarpMouseCallback);
+        I_InitGraphics();
+        V_RestoreBuffer(); // make the V_ routines work
+        V_LoadXlaTable();  // need XLATAB for software screen wipe
+    }
+
+    // haleyjd 08/28/10: Init Choco Strife stuff.
+    D_InitChocoStrife();
+
+    // haleyjd 20110924: moved S_Init up to here
+    if(devparm) // [STRIFE]
+        DEH_printf("S_Init: Setting up sound.\n");
+    S_Init (sfxVolume * 8, musicVolume * 8, voiceVolume * 8); // [STRIFE]: voice
+
+    // haleyjd 20110210: Create Strife hub save folders
+    M_CreateSaveDirs(savegamedir);
+
+    I_InitJoystick();
+    
+    if(devparm)
+        DEH_printf("HU_Init: Setting up heads up display.\n");
+    HU_Init ();
+
+    if(dofrontend)
+    {
+        // [SVE] svillarreal - play nightdive and strife intro movies
+        if(!d_skipmovies)
+        {
+            I_AVStartVideoStream("movies/NightDive.ogv");
+            I_AVStartVideoStream("movies/Strife.ogv");
+        }
+
+        FE_StartFrontend(); // returns when user starts the game
+    }
+}
 
 //
 // STRIFE Graphical Intro Sequence
@@ -1165,10 +1464,14 @@ static void D_InitIntroSequence(void)
     {
         // In vanilla Strife, Mode 13h was initialized directly in D_DoomMain.
         // We have to be a little more courteous of the low-level code here.
-        I_SetWindowTitle(gamedescription);
-        I_SetGrabMouseCallback(D_StartupGrabCallback);
-        I_InitGraphics();
-        V_RestoreBuffer(); // make the V_ routines work
+        // [SVE]: only do this here if not running the frontend.
+        if(!dofrontend)
+        {
+            I_SetWindowTitle(gamedescription);
+            I_SetGrabMouseCallback(D_StartupGrabCallback);
+            I_InitGraphics();
+            V_RestoreBuffer(); // make the V_ routines work
+        }
 
         // Load all graphics
         rawgfx_startup0   = W_CacheLumpName("STARTUP0", PU_STATIC);
@@ -1284,14 +1587,30 @@ void D_IntroTick(void)
 //
 //=============================================================================
 
+// haleyjd [SVE]: cheat state tracking in D_DoomMain
+enum
+{
+    CHEAT_NONE = 0,    // not cheating
+    CHEAT_SP   = 0x01, // cheating if in single player
+    CHEAT_MP   = 0x02, // cheating if in multiplayer
+    
+    CHEAT_ANY  = (CHEAT_SP|CHEAT_MP) // cheating regardless
+};
+
 //
 // D_DoomMain
 //
 void D_DoomMain (void)
 {
-    int             p;
-    char            file[256];
-    char            demolumpname[9];
+    int  p;
+    char file[256];
+    char demolumpname[9];
+    int setcheating = CHEAT_NONE; // haleyjd [SVE] 20140914
+
+    // haleyjd 20140821: [SVE] open debug console
+#if defined(_WIN32) && defined(_DEBUG)
+    I_W32_DebugConsole();
+#endif
 
     I_AtExit(D_Endoom, false);
 
@@ -1313,6 +1632,7 @@ void D_DoomMain (void)
     {
         testcontrols = true;
         showintro = false;
+        setcheating |= CHEAT_ANY;
     }
 
     // haleyjd 20110206: Moved up -devparm for max visibility
@@ -1324,6 +1644,8 @@ void D_DoomMain (void)
     //
 
     devparm = M_CheckParm ("-devparm");
+    if(devparm)
+        setcheating |= CHEAT_ANY;
 
     // print banner
 
@@ -1390,6 +1712,12 @@ void D_DoomMain (void)
     }
 
 #endif
+            
+#ifdef FEATURE_DEHACKED
+    if(devparm)
+        printf("DEH_Init: Init Dehacked support.\n");
+    DEH_Init();
+#endif
 
     //!
     // @vanilla
@@ -1398,6 +1726,8 @@ void D_DoomMain (void)
     //
 
     nomonsters = M_CheckParm ("-nomonsters");
+    if(nomonsters)
+        setcheating |= CHEAT_SP;
 
     //!
     // @vanilla
@@ -1406,6 +1736,8 @@ void D_DoomMain (void)
     //
 
     workparm = M_CheckParm ("-work");
+    if(workparm)
+        setcheating |= CHEAT_ANY;
 
     //!
     // @vanilla
@@ -1515,6 +1847,39 @@ void D_DoomMain (void)
         forwardmove[1] = forwardmove[1]*scale/100;
         sidemove[0] = sidemove[0]*scale/100;
         sidemove[1] = sidemove[1]*scale/100;
+        setcheating |= CHEAT_ANY;
+    }
+
+    timelimit = 0;
+
+    //! 
+    // @arg <n>
+    // @category net
+    // @vanilla
+    //
+    // For multiplayer games: exit each level after n minutes.
+    //
+
+    p = M_CheckParmWithArgs("-timer", 1);
+
+    if (p)
+    {
+        timelimit = atoi(myargv[p+1]);
+        printf("timer: %i\n", timelimit);
+    }
+
+    //!
+    // @category net
+    // @vanilla
+    //
+    // Austin Virtual Gaming: end levels after 20 minutes.
+    //
+
+    p = M_CheckParm ("-avg");
+
+    if (p)
+    {
+        timelimit = 20;
     }
     
     // init subsystems
@@ -1552,14 +1917,10 @@ void D_DoomMain (void)
         DEH_printf("W_Init: Init WADfiles.\n");
     D_AddFile(iwadfile);
     W_CheckCorrectIWAD(strife);
-
-#ifdef FEATURE_DEHACKED
-    // Load dehacked patches specified on the command line.
-    DEH_ParseCommandLine();
-#endif
-
-    // Load PWAD files.
+    D_IdentifyVersion(); // haleyjd 20140911: [SVE] moved up here
     modifiedgame = W_ParseCommandLine();
+    if(modifiedgame)
+        setcheating |= CHEAT_ANY;
 
     // [STRIFE] serial number output
     if(devparm)
@@ -1629,6 +1990,7 @@ void D_DoomMain (void)
 
             M_StringCopy(demolumpname, myargv[p + 1], sizeof(demolumpname));
         }
+        setcheating |= CHEAT_ANY; // no achievements during demo playback.
 
         printf("Playing demo %s.\n", file);
     }
@@ -1639,7 +2001,8 @@ void D_DoomMain (void)
 
     W_GenerateHashTable();
     
-    D_IdentifyVersion();
+    V_LoadBigFont(); // haleyjd 20140928: [SVE]
+
     InitGameVersion();
     D_SetGameDescription();
     savegamedir = M_GetSaveGameDir("strife1.wad");
@@ -1655,20 +2018,25 @@ void D_DoomMain (void)
         printf ("NET_Init: Init network subsystem.\n");
     NET_Init();
 #endif
+
+    // get skill / episode / map from parms
+    startskill = sk_easy; // [STRIFE] inits to sk_easy
+    startepisode = 1;
+    startmap = 1;
+    autostart = false;
+
+    // haleyjd 20141002: [SVE]: frontend
+    D_InitFrontend();
+
     D_ConnectNetGame();
 
-    // haleyjd 20110210: Create Strife hub save folders
-    M_CreateSaveDirs(savegamedir);
-
-    I_GraphicsCheckCommandLine();
+    // haleyjd 20141008: [SVE]: remember some startup state
+    start_respawnparm = respawnparm;
+    start_fastparm    = fastparm;
 
     // haleyjd 20110206 [STRIFE] Startup the introduction sequence
     D_InitIntroSequence();
 
-    // haleyjd 20110924: moved S_Init up to here
-    if(devparm) // [STRIFE]
-        DEH_printf("S_Init: Setting up sound.\n");
-    S_Init (sfxVolume * 8, musicVolume * 8, voiceVolume * 8); // [STRIFE]: voice
     D_IntroTick(); // [STRIFE]
 
     // Check for -file in shareware
@@ -1699,12 +2067,6 @@ void D_DoomMain (void)
     }
     
     D_IntroTick(); // [STRIFE]
-    
-    // get skill / episode / map from parms
-    startskill = sk_medium;
-    startepisode = 1;
-    startmap = 1;
-    autostart = false;
 
     //!
     // @arg <skill>
@@ -1739,38 +2101,6 @@ void D_DoomMain (void)
     //     autostart = true;
     // }
 
-    timelimit = 0;
-
-    //! 
-    // @arg <n>
-    // @category net
-    // @vanilla
-    //
-    // For multiplayer games: exit each level after n minutes.
-    //
-
-    p = M_CheckParmWithArgs("-timer", 1);
-
-    if (p)
-    {
-        timelimit = atoi(myargv[p+1]);
-        printf("timer: %i\n", timelimit);
-    }
-
-    //!
-    // @category net
-    // @vanilla
-    //
-    // Austin Virtual Gaming: end levels after 20 minutes.
-    //
-
-    p = M_CheckParm ("-avg");
-
-    if (p)
-    {
-        timelimit = 20;
-    }
-
     //!
     // @arg x
     // @vanilla
@@ -1798,6 +2128,7 @@ void D_DoomMain (void)
             }
         }
         autostart = true;
+        setcheating |= CHEAT_SP; // cheating if SP game
     }
 
     if (testcontrols)
@@ -1842,9 +2173,6 @@ void D_DoomMain (void)
     I_PrintStartupBanner(gamedescription);
     PrintDehackedBanners();
 
-    // haleyjd 08/28/10: Init Choco Strife stuff.
-    D_InitChocoStrife();
-
     // haleyjd 08/22/2010: [STRIFE] Modified string to match binary
     if(devparm) // [STRIFE]
        DEH_printf("R_Init: Loading Graphics - ");
@@ -1859,7 +2187,6 @@ void D_DoomMain (void)
     if(devparm) // [STRIFE]
         DEH_printf("I_Init: Setting up machine state.\n");
     I_CheckIsScreensaver();
-    I_InitJoystick();
     D_IntroTick(); // [STRIFE]
 
     D_IntroTick(); // [STRIFE]
@@ -1897,9 +2224,6 @@ void D_DoomMain (void)
 
     PrintGameVersion();
 
-    if(devparm)
-        DEH_printf("HU_Init: Setting up heads up display.\n");
-    HU_Init ();
     D_IntroTick(); // [STRIFE]
 
     if(devparm)
@@ -1918,6 +2242,12 @@ void D_DoomMain (void)
     if (gamemode == commercial && W_CheckNumForName("map01") < 0)
         storedemo = true;
     */
+
+    // haleyjd [SVE] 20140914: propagate local cheat tracking to global state
+    if(netgame)
+        d_cheating = ((setcheating & CHEAT_MP) == CHEAT_MP);
+    else
+        d_cheating = ((setcheating & CHEAT_SP) == CHEAT_SP);
 
     //!
     // @arg <x>

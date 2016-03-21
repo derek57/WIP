@@ -37,6 +37,10 @@
 
 #include "d_loop.h"
 
+#ifdef _USE_STEAM_
+#include "steamService.h"
+#endif
+
 ticcmd_t *netcmds;
 
 // Called when a player leaves the game
@@ -128,6 +132,10 @@ static void LoadGameSettings(net_gamesettings_t *settings)
     consoleplayer = settings->consoleplayer;
     randomparm = settings->random;
 
+    // [SVE] new settings
+    classicmode = settings->classicmode;
+    d_maxgore   = settings->maxgore;
+
     if (lowres_turn)
     {
         printf("NOTE: Turning resolution is reduced; this is probably "
@@ -137,6 +145,7 @@ static void LoadGameSettings(net_gamesettings_t *settings)
     for (i = 0; i < MAXPLAYERS; ++i)
     {
         playeringame[i] = i < settings->num_players;
+        ctcprefteams[i] = settings->player_classes[i]; // [SVE]
     }
 }
 
@@ -147,6 +156,8 @@ static void SaveGameSettings(net_gamesettings_t *settings)
 {
     // Fill in game settings structure with appropriate parameters
     // for the new game
+
+    memset(settings, 0, sizeof(*settings));
 
     settings->deathmatch = deathmatch;
     settings->episode = startepisode;
@@ -159,6 +170,10 @@ static void SaveGameSettings(net_gamesettings_t *settings)
     settings->respawn_monsters = respawnparm;
     settings->timelimit = timelimit;
     settings->random = randomparm;
+
+    // [SVE] new settings
+    settings->classicmode = classicmode;
+    settings->maxgore     = d_maxgore;
 
     settings->lowres_turn = M_ParmExists("-record")
                          && !M_ParmExists("-longtics");
@@ -207,6 +222,9 @@ static void InitConnectData(net_connect_data_t *connect_data)
     connect_data->lowres_turn = M_CheckParm("-record") > 0
                              && M_CheckParm("-longtics") == 0;
 
+    // [SVE]: transmit preferred CTC team
+    connect_data->player_class = ctcprefteam;
+
     // Read checksums of our WAD directory and dehacked information
 
     W_Checksum(connect_data->wad_sha1sum);
@@ -221,6 +239,11 @@ void D_ConnectNetGame(void)
 
     InitConnectData(&connect_data);
     netgame = D_InitNetGame(&connect_data);
+
+#ifdef _USE_STEAM_
+    // leave lobby if still in one
+    I_SteamLeaveLobby();
+#endif
 
     //!
     // @category net
