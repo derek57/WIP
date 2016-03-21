@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -29,6 +30,16 @@
 #include "r_draw.h"
 #include "hu_stuff.h" // [STRIFE]
 
+#include "z_zone.h"
+#include "m_qstring.h" // [SVE]
+#include "doomstat.h"
+#include "st_stuff.h"
+#include "m_misc.h"
+#include "w_wad.h"
+#ifdef _USE_STEAM_
+#include "net_client.h"
+#endif
+
 // boolean : whether the screen is always erased
 #define noterased viewwindowx
 
@@ -41,10 +52,10 @@ extern boolean D_PatchClipCallback(patch_t *patch, int x, int y); // [STRIFE]
 //
 // haleyjd 20100918: [STRIFE] New function.
 //
-void HUlib_drawYellowText(int x, int y, char *text)
+void HUlib_drawYellowText(int x, int y, const char *text, boolean shadowed)
 {
     int start_x = x;
-    char *rover = text;
+    const char *rover = text;
     char c;
 
     while((c = *rover++))
@@ -67,7 +78,7 @@ void HUlib_drawYellowText(int x, int y, char *text)
 
         if(c >= 0 && c < HU_FONTSIZE)
         {
-            patch_t *patch = yfont[(int) c];
+            patch_t *patch = shadowed ? ffont[(int) c] : yfont[(int) c]; // [SVE]
             int      width = SHORT(patch->width);
 
             if(x + width <= (SCREENWIDTH - 20))
@@ -91,6 +102,50 @@ void HUlib_drawYellowText(int x, int y, char *text)
             x += 4;
         }
     }
+}
+
+//
+// HUlib_yellowTextWidth
+//
+// haleyjd 20141009: [SVE]
+// NB: Only works if the string doesn't get wrapped.
+//
+int HUlib_yellowTextWidth(const char *text)
+{
+    int width = 0;
+    int widestwidth = 0;
+    const char *rover = text;
+    char c;
+
+    while((c = *rover++))
+    {
+        if(c == '\n')
+        {
+            if(width > widestwidth)
+                widestwidth = width;
+            width = 0;
+            continue;
+        }
+
+        if(c == '_')
+            c = ' ';
+
+        c = toupper(c) - HU_FONTSTART;
+
+        if(c >= 0 && c < HU_FONTSIZE)
+        {
+            patch_t *patch = yfont[(int) c];
+            width += SHORT(patch->width);
+        }
+        else
+        {
+            width += 4;
+        }
+    }
+    if(width > widestwidth)
+        widestwidth = width;
+
+    return widestwidth;
 }
 
 //
@@ -175,42 +230,76 @@ boolean HUlib_delCharFromTextLine(hu_textline_t* t)
 // HUlib_drawTextLine
 //
 // haleyjd 09/18/10: [STRIFE] Modified to not draw underscores in text.
+// [SVE] svillarreal - longtext param added
 //
-void
-HUlib_drawTextLine
-( hu_textline_t*        l,
-  boolean               drawcursor )
+void HUlib_drawTextLine(hu_textline_t* l, boolean drawcursor, boolean longtext)
 {
     int                 i;
     int                 w;
     int                 x;
     unsigned char       c;
+    int                 start;
 
     // draw the new stuff
     x = l->x;
+    start = 0;
 
-    for(i = 0; i < l->len; i++)
+    // [SVE] svillarreal - if text is going off the screen, then pick a position
+    // to offset the text by
+    if(longtext)
+    {
+        for(i = 0; i < l->len; i++)
+        {
+            c = toupper(l->l[i]);
+            if(c != ' ' && c >= l->sc && c < '_') // [STRIFE]: Underscores excluded
+            {
+                w = SHORT(l->f[c - l->sc]->width);
+                if(x+w > SCREENWIDTH)
+                {
+                    start = l->len - i;
+                    break;
+                }
+
+                x += w;
+            }
+            else
+            {
+                x += 4;
+
+                if(x >= SCREENWIDTH)
+                {
+                    start = l->len - i;
+                    break;
+                }
+            }
+        }
+
+        x = l->x;
+    }
+
+    for(i = start; i < l->len; i++)
     {
         c = toupper(l->l[i]);
-        if (c != ' ' && c >= l->sc && c < '_') // [STRIFE]: Underscores excluded
+        if(c != ' ' && c >= l->sc && c < '_') // [STRIFE]: Underscores excluded
         {
             w = SHORT(l->f[c - l->sc]->width);
-            if (x+w > SCREENWIDTH)
+            if(x+w > SCREENWIDTH)
                 break;
+
             V_DrawPatchDirect(x, l->y, l->f[c - l->sc]);
             x += w;
         }
         else
         {
             x += 4;
-            if (x >= SCREENWIDTH)
+
+            if(x >= SCREENWIDTH)
                 break;
         }
     }
 
     // draw the cursor if requested
-    if (drawcursor
-        && x + SHORT(l->f['_' - l->sc]->width) <= SCREENWIDTH)
+    if(drawcursor && x + SHORT(l->f['_' - l->sc]->width) <= SCREENWIDTH)
     {
         V_DrawPatchDirect(x, l->y, l->f['_' - l->sc]);
     }
@@ -344,7 +433,7 @@ void HUlib_drawSText(hu_stext_t* s)
         l = &s->l[idx];
 
         // need a decision made here on whether to skip the draw
-        HUlib_drawTextLine(l, false); // no cursor, please
+        HUlib_drawTextLine(l, false, false); // no cursor, please
     }
 }
 
@@ -437,7 +526,7 @@ HUlib_keyInIText
 
     if (ch >= ' ' && ch <= '_') 
         HUlib_addCharToTextLine(&it->l, (char) ch);
-    else if (ch == KEY_BACKSPACE) 
+    else if (ch == KEY_BACKSPACE || ch == KEY_DEL) // [SVE] 20141213: due to Steamworks bug
         HUlib_delCharFromIText(it);
     else if (ch != KEY_ENTER) 
         return false; // did not eat key
@@ -456,7 +545,7 @@ void HUlib_drawIText(hu_itext_t* it)
 
     if (!*it->on)
         return;
-    HUlib_drawTextLine(l, true); // draw the line w/ cursor
+    HUlib_drawTextLine(l, true, true); // draw the line w/ cursor
 }
 
 //
@@ -471,4 +560,131 @@ void HUlib_eraseIText(hu_itext_t* it)
     HUlib_eraseTextLine(&it->l);
     it->laston = *it->on;
 }
+
+//
+// HUlib_makePrettyPlayerName
+//
+// haleyjd 20141025: [SVE] Make a pretty player name from the ugly one that has
+// a ": " sequence appended to it. You must destroy the returned character
+// buffer when you're done with it.
+//
+char *HUlib_makePrettyPlayerName(int playerNum)
+{
+    qstring_t qstr;
+    size_t colonpos;
+
+    QStrInitCreate(&qstr);
+    QStrCopy(&qstr, player_names[playerNum]);
+    if((colonpos = QStrFindFirstOfChar(&qstr, ':')) != qstring_npos)
+        QStrTruncate(&qstr, colonpos);
+
+    return QStrBuffer(&qstr);
+}
+
+static void HUlib_drawYellowNum(int x, int y, int num)
+{
+    int numdigits = 3;
+    int w = 8; 
+    int neg = num < 0;
+
+    if(neg)
+    {
+        if(num < -99)
+            num = -99;
+
+        num = -num;
+    }
+
+    // in the special case of 0, you draw 0
+    if(!num)
+        V_DrawPatch(x - w, y, ffont['0' - HU_FONTSTART]);
+
+    // draw the new number
+    while(num && numdigits--)
+    {
+        x -= w;
+        V_DrawPatch(x, y, ffont[(num % 10 + '0') - HU_FONTSTART]);
+        num /= 10;
+    }
+
+    // draw a minus sign if necessary
+    if(neg)
+        V_DrawPatch(x - 8, y, ffont['-' - HU_FONTSTART]);
+}
+
+//
+// HUlib_drawFrags
+//
+// haleyjd 20141025: [SVE] Show a frags chart when a player dies.
+//
+void HUlib_drawFrags(void)
+{
+    char *names[MAXPLAYERS+2];
+    int i, x, y;
+    int widest_name = 0;
+
+    V_WriteBigText("FRAGS", (SCREENWIDTH - V_BigFontStringWidth("FRAGS"))/2, 24);
+
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        int namewidth;
+
+        if(!playeringame[i])
+            continue;
+
+        names[i]  = HUlib_makePrettyPlayerName(i);
+        if((namewidth = HUlib_yellowTextWidth(names[i])) > widest_name)
+            widest_name = namewidth;
+    }
+    if(capturethechalice)
+    {
+        int w;
+        names[8] = "Blue Team Score";
+        names[9] = "Red Team Score";
+
+        if((w = HUlib_yellowTextWidth(names[8])) > widest_name)
+            widest_name = w;
+    }
+
+    x = (SCREENWIDTH - widest_name) / 2 - 24;
+    y = 48;
+
+    for(i = 0; i < MAXPLAYERS; i++)
+    {
+        char patch[9];
+
+        if(!playeringame[i])
+            continue;
+     
+        if(capturethechalice)
+        {
+            if(players[i].allegiance == CTC_TEAM_BLUE)
+                M_StringCopy(patch, "STCOLOR8", sizeof(patch));
+            else
+                M_StringCopy(patch, "STCOLOR2", sizeof(patch));
+        }
+        else
+            M_snprintf(patch, sizeof(patch), "STCOLOR%d", i+1);
+
+        V_DrawPatch(x, y, W_CacheLumpName(patch, PU_CACHE));
+        HUlib_drawYellowText(x+10, y+1, names[i], true);
+        HUlib_drawYellowNum(x+10+widest_name+8*4, y+1, ST_calcFrags(i));
+
+        y += 12;
+        Z_Free(names[i]);
+    }
+    if(capturethechalice)
+    {
+        y += 12;
+        V_DrawPatch(x, y, W_CacheLumpName("STCOLOR8", PU_CACHE));
+        HUlib_drawYellowText(x+10, y+1, names[8], true);
+        HUlib_drawYellowNum(x+10+widest_name+8*4, y+1, ctcbluescore);
+        y += 12;
+        V_DrawPatch(x, y, W_CacheLumpName("STCOLOR2", PU_CACHE));
+        HUlib_drawYellowText(x+10, y+1, names[9], true);
+        HUlib_drawYellowNum(x+10+widest_name+8*4, y+1, ctcredscore);
+    }
+}
+
+// EOF
 

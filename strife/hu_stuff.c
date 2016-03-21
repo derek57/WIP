@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -30,6 +31,7 @@
 #include "hu_stuff.h"
 #include "hu_lib.h"
 #include "m_controls.h"
+#include "m_menu.h"
 #include "m_misc.h"
 #include "w_wad.h"
 
@@ -41,21 +43,27 @@
 #include "dstrings.h"
 #include "sounds.h"
 
+// [SVE]
+#include "net_client.h"
+#include "p_spec.h"
+
 //
 // Locally used constants, shortcuts.
 //
-#define HU_TITLE        (mapnames[gamemap-1])
-#define HU_TITLEHEIGHT  1
-#define HU_TITLEX       0
+#define HU_TITLE            (mapnames[gamemap-1])
+#define HU_TITLEHEIGHT      1
+#define HU_TITLEX           0
 
 // haleyjd 09/01/10: [STRIFE] 167 -> 160 to move up level name
-#define HU_TITLEY       (160 - SHORT(hu_font[0]->height))
+#define HU_TITLEY           (160 - SHORT(hu_font[0]->height))
 
-#define HU_INPUTTOGGLE  't'
-#define HU_INPUTX       HU_MSGX
-#define HU_INPUTY       (HU_MSGY + HU_MSGHEIGHT*(SHORT(hu_font[0]->height) +1))
-#define HU_INPUTWIDTH   64
-#define HU_INPUTHEIGHT  1
+#define HU_INPUTTOGGLE      't'
+#define HU_INPUTX           HU_MSGX
+#define HU_INPUTY           (HU_MSGY + HU_MSGHEIGHT*(SHORT(hu_font[0]->height) +1))
+#define HU_INPUTWIDTH       64
+#define HU_INPUTHEIGHT      1
+
+#define HU_NOTIFICATIONY    160
 
 char *chat_macros[10] =
 {
@@ -71,6 +79,7 @@ char *chat_macros[10] =
     HUSTR_CHATMACRO9
 };
 
+#ifndef _USE_STEAM_
 // villsa [STRIFE]
 char player_names[8][16] =
 {
@@ -83,11 +92,13 @@ char player_names[8][16] =
     "7: ",
     "8: "
 };
+#endif
 
 char                    chat_char; // remove later.
 static player_t*        plr;
 patch_t*                hu_font[HU_FONTSIZE];
 patch_t*                yfont[HU_FONTSIZE];   // haleyjd 09/18/10: [STRIFE]
+patch_t*                ffont[HU_FONTSIZE];   // haleyjd 20141204: [SVE]
 static hu_textline_t    w_title;
 boolean                 chat_on;
 static hu_itext_t       w_chat;
@@ -106,8 +117,25 @@ static int              message_counter;
 
 static boolean          headsupactive = false;
 
+// [SVE] haleyjd: notification positions for notification widget
+enum notificationpos_e
+{
+    NOTIFY_POS_STATBAR,
+    NOTIFY_POS_FULLSCREEN
+};
+
+// [SVE] svillarreal
+static hu_stext_t       w_notification;
+static boolean          notification_on;
+static int              notification_counter;
+static int              notification_pos;
+static int              notification_y;
+static boolean          showfragschart;
+
+#ifndef _USE_STEAM_
 // haleyjd 20130915 [STRIFE]: need nickname
 extern char *nickname;
+#endif
 
 // haleyjd 20130915 [STRIFE]: true if setting nickname
 static boolean hu_setting_name = false;
@@ -120,7 +148,7 @@ static boolean hu_setting_name = false;
 // haleyjd 08/31/10: [STRIFE] Changed for Strife level names.
 // List of names for levels.
 
-char *mapnames[] =
+char *mapnames[HU_NUMMAPNAMES] =
 {
     // Strife map names
 
@@ -166,7 +194,15 @@ char *mapnames[] =
     // Demo version maps
     HUSTR_32,
     HUSTR_33,
-    HUSTR_34
+    HUSTR_34,
+
+    // [SVE]: Super secret level
+    HUSTR_35,
+
+    // [SVE]: Capture the Chalice maps
+    HUSTR_36,
+    HUSTR_37,
+    HUSTR_38
 };
 
 //
@@ -180,11 +216,13 @@ void HU_Init(void)
     int		i;
     int		j;
     char	buffer[9];
+    char        fefbuf[9];
 
     // load the heads-up font
     j = HU_FONTSTART;
     for (i=0;i<HU_FONTSIZE;i++)
     {
+        DEH_snprintf(fefbuf, 9, "FEF%.3d", j);
         DEH_snprintf(buffer, 9, "STCFN%.3d", j++);
         hu_font[i] = (patch_t *) W_CacheLumpName(buffer, PU_STATIC);
 
@@ -192,7 +230,15 @@ void HU_Init(void)
         // how Rogue did it :P
         buffer[2] = 'B';
         yfont[i] = (patch_t *) W_CacheLumpName(buffer, PU_STATIC);
+
+        // haleyjd 20141204: [SVE]
+        ffont[i] = (patch_t *) W_CacheLumpName(fefbuf, PU_STATIC);
     }
+
+#ifdef _USE_STEAM_
+    for(i = 0; i < MAXPLAYERS; i++)
+        M_snprintf(player_names[i], sizeof(player_names[i]), "%d: ", i+1);
+#endif
 }
 
 //
@@ -227,7 +273,11 @@ void HU_Start(void)
                        HU_FONTSTART);
 
     // haleyjd 08/31/10: [STRIFE] Get proper map name.
-    s = HU_TITLE;
+    // [SVE]: rangecheck to allow maps >= number of built-in maps
+    if(gamemap - 1 < HU_NUMMAPNAMES)
+        s = HU_TITLE;
+    else
+        s = "New Area";
 
     // [STRIFE] Removed Chex Quest stuff.
 
@@ -258,12 +308,30 @@ void HU_Start(void)
                         hu_font,
                         HU_FONTSTART, &chat_on);
 
+        if(screenblocks > 10)
+        {
+            notification_pos = NOTIFY_POS_FULLSCREEN;
+            notification_y   = HU_NOTIFICATIONY + 24;
+        }
+        else
+        {
+            notification_pos = NOTIFY_POS_STATBAR;
+            notification_y   = HU_NOTIFICATIONY;
+        }
+
+        // [SVE] svillarreal - create the notification widget
+        HUlib_initSText(&w_notification,
+                        -1, notification_y, netgame ? 1 : HU_MSGHEIGHT,
+                        ffont,
+                        HU_FONTSTART, &notification_on);
+
         // create the inputbuffer widgets
         for (i=0 ; i<MAXPLAYERS ; i++)
             HUlib_initIText(&w_inputbuffer[i], 0, 0, 0, 0, &always_off);
 
         headsupactive = true;
 
+#ifndef _USE_STEAM_
         // haleyjd 09/18/10: [STRIFE] nickname weirdness. 
         if(nickname != player_names[consoleplayer])
         {
@@ -273,6 +341,7 @@ void HU_Start(void)
                 nickname = player_names[consoleplayer];
             }
         }
+#endif
     }
 }
 
@@ -283,10 +352,32 @@ void HU_Start(void)
 //
 void HU_Drawer(void)
 {
+    static boolean lasthudchanged = false;
+    boolean hudchanged;
+
     HUlib_drawSText(&w_message);
+    HUlib_drawSText(&w_notification);
     HUlib_drawIText(&w_chat);
     if (automapactive)
-        HUlib_drawTextLine(&w_title, false);
+        HUlib_drawTextLine(&w_title, false, false);
+
+    if(deathmatch && (showfragschart || players[consoleplayer].health <= 0) && screenblocks >= 10)
+        HUlib_drawFrags();
+
+    hudchanged = (screenblocks > 10);
+
+    // [SVE] svillarreal - need to change the offset for notifications
+    // if the hud changed at all
+    if(lasthudchanged != hudchanged)
+    {
+        notification_pos = hudchanged ? NOTIFY_POS_FULLSCREEN : NOTIFY_POS_STATBAR;
+        notification_y   = hudchanged ? HU_NOTIFICATIONY + 24 : HU_NOTIFICATIONY;
+
+        HUlib_initSText(&w_notification, -1, notification_y, netgame ? 1 : HU_MSGHEIGHT,
+                        ffont, HU_FONTSTART, &notification_on);
+
+        lasthudchanged = hudchanged;
+    }
 }
 
 //
@@ -297,8 +388,81 @@ void HU_Drawer(void)
 void HU_Erase(void)
 {
     HUlib_eraseSText(&w_message);
+    HUlib_eraseSText(&w_notification);
     HUlib_eraseIText(&w_chat);
     HUlib_eraseTextLine(&w_title);
+}
+
+//
+// HU_SetNotification
+//
+// [SVE] svillarreal - broadcast a special message
+//
+
+void HU_SetNotification(char *message)
+{
+    S_StartSound(NULL, sfx_yeah);
+    notification_on = true;
+    notification_counter = HU_MSGTIMEOUT/2;
+
+    HUlib_addMessageToSText(&w_notification, NULL, message);
+    w_notification.l[w_notification.cl].x = (SCREENWIDTH/2) - (HUlib_yellowTextWidth(message)/2);
+}
+
+//
+// HU_NotifyCheating
+//
+// haleyjd 20141122: [SVE] Convenience function
+//
+void HU_NotifyCheating(player_t *pl)
+{
+#ifdef _USE_STEAM_
+    if(!pl || !(pl->cheats & CF_CHEATING))
+    {
+        // only one at a time plz
+        // 20141203: also not in netgames.
+        if(!netgame && notification_counter <= 0) 
+        {
+            char *msg = "ACHIEVEMENTS ARE DISABLED";
+            S_StartSound(NULL, sfx_radio);
+            notification_on = true;
+            notification_counter = HU_MSGTIMEOUT/2;
+
+            HUlib_addMessageToSText(&w_notification, NULL, msg);
+            w_notification.l[w_notification.cl].x = (SCREENWIDTH/2) - (HUlib_yellowTextWidth(msg)/2);
+        }
+
+        if(pl)
+            pl->cheats |= CF_CHEATING;
+    }
+#endif
+}
+
+// 
+// HU_ShowTime
+//
+// [SVE] haleyjd 20141213: show timer countdown
+//
+void HU_ShowTime(void)
+{
+    char timestr[90];
+    int minutes;
+    int seconds;
+
+    if(!levelTimer || levelTimeCount <= 0)
+        return;
+
+    // [SVE]: enhanced output
+    minutes = ((levelTimeCount/TICRATE) / 60) % 60;
+    seconds = (levelTimeCount/TICRATE) % 60;
+
+    M_snprintf(timestr, sizeof(timestr), "%02d:%02d", minutes, seconds);
+
+    notification_on = true;
+    notification_counter = 2;
+
+    HUlib_addMessageToSText(&w_notification, NULL, timestr);
+    w_notification.l[w_notification.cl].x = (SCREENWIDTH/2) - (HUlib_yellowTextWidth(timestr)/2);
 }
 
 //
@@ -401,20 +565,40 @@ void HU_Ticker(void)
 {
     int i, rc;
     char c;
-    //char *prefix;  STRIFE-TODO
 
+    // [SVE]: show time limit if active
+    HU_ShowTime();
+    
     // tick down message counter if message is up
-    if (message_counter && !--message_counter)
+    if(message_counter && !--message_counter)
     {
         message_on = false;
         message_nottobefuckedwith = false;
+    }
+
+    // [SVE] svillarreal - update notification widget
+    if(--notification_counter > 0)
+        notification_on = !automapactive;
+    else
+    {
+        w_notification.cl = 0;
+
+        // clear all text
+        for(i = 0; i < w_notification.h; i++)
+        {
+            w_notification.l[i].l[0] = 0;
+            w_notification.l[i].len = 0;
+        }
+
+        notification_on = false;
+        notification_counter = 0;
     }
 
     // haleyjd 20110219: [STRIFE] this condition was removed
     //if (showMessages || message_dontfuckwithme)
     //{
         // display message if necessary
-        if ((plr->message && !message_nottobefuckedwith)
+        if((plr->message && !message_nottobefuckedwith)
             || (plr->message && message_dontfuckwithme))
         {
             //HUlib_addMessageToSText(&w_message, 0, plr->message);
@@ -428,23 +612,23 @@ void HU_Ticker(void)
     //} // else message_on = false;
 
     // check for incoming chat characters
-    if (netgame)
+    if(netgame)
     {
-        for (i=0 ; i<MAXPLAYERS; i++)
+        for(i=0 ; i<MAXPLAYERS; i++)
         {
-            if (!playeringame[i])
+            if(!playeringame[i])
                 continue;
-            if (i != consoleplayer
+            if(i != consoleplayer
                 && (c = players[i].cmd.chatchar))
             {
-                if (c <= HU_BROADCAST)
+                if(c <= HU_CHANGENAME) // [STRIFE]: allow for HU_CHANGENAME
                     chat_dest[i] = c;
                 else
                 {
                     rc = HUlib_keyInIText(&w_inputbuffer[i], c);
-                    if (rc && c == KEY_ENTER)
+                    if(rc && c == KEY_ENTER)
                     {
-                        if (w_inputbuffer[i].l.len
+                        if(w_inputbuffer[i].l.len
                             && (chat_dest[i] == consoleplayer+1
                              || chat_dest[i] == HU_BROADCAST))
                         {
@@ -460,7 +644,12 @@ void HU_Ticker(void)
                         {
                             // haleyjd 20130915 [STRIFE]: set player name
                             DEH_snprintf(player_names[i], sizeof(player_names[i]),
-                                         "%.13s: ", w_inputbuffer[i].l.l);
+#ifdef _USE_STEAM_
+                                         "%.27s: ", 
+#else
+                                         "%.13s: ",
+#endif
+                                         w_inputbuffer[i].l.l);
                         }
                         HUlib_resetIText(&w_inputbuffer[i]);
                     }
@@ -548,6 +737,15 @@ boolean HU_Responder(event_t *ev)
     {
         altdown = ev->type == ev_keydown;
         return false;
+    }
+
+    // [SVE]: frags chart
+    if(netgame && ev->data1 == key_menu_save)
+    {
+        if(ev->type == ev_keydown)
+            showfragschart = true;
+        else if(ev->type == ev_keyup)
+            showfragschart = false;
     }
 
     if (ev->type != ev_keydown)
@@ -648,6 +846,7 @@ boolean HU_Responder(event_t *ev)
                     plr->message = lastmessage;
                     hu_setting_name = true;
                 }
+
                 else
                 {
                     eatkey = HUlib_keyInIText(&w_chat, c);
@@ -664,13 +863,27 @@ boolean HU_Responder(event_t *ev)
                     // [STRIFE]: name setting
                     if(hu_setting_name)
                     {
+                        // [SVE]: display pretty player name
+                        char *oldName = HUlib_makePrettyPlayerName(consoleplayer);
                         DEH_snprintf(lastmessage, sizeof(lastmessage),
-                            "%s now %.13s", player_names[consoleplayer],
+#ifdef _USE_STEAM_
+                            "%s now %.27s", 
+#else
+                            "%s now %.13s",
+#endif
+                            oldName,
                             w_chat.l.l);
-                        // haleyjd 20141024: missing name set for local client
-                        DEH_snprintf(player_names[consoleplayer],
+                        Z_Free(oldName);
+
+                        // set name for local client
+                        M_snprintf(player_names[consoleplayer],
                             sizeof(player_names[consoleplayer]),
-                            "%.13s: ", w_chat.l.l);
+#ifdef _USE_STEAM_
+                            "%.27s: ",
+#else
+                            "%.13s: ",
+#endif
+                            w_chat.l.l);
                         hu_setting_name = false;
                     }
                     else

@@ -16,9 +16,6 @@
 //	Random number LUT.
 //
 
-
-#include <time.h>
-
 #include "m_random.h"
 
 //
@@ -51,12 +48,39 @@ static const unsigned char rndtable[256] = {
 int	rndindex = 0;
 int	prndindex = 0;
 
+#ifdef M_RANDOM_LOG
+
+#include <stdio.h>
+
+static FILE *randlog;
+extern int gametic;
+
+int (P_Random)(const char *filename, int line)
+{
+    if(!randlog)
+        randlog = fopen("randlog.txt", "w");
+
+    prndindex = (prndindex+1)&0xff;
+
+    if(randlog)
+    {
+        fprintf(randlog, "%d <- P_Random(%s, %d)@%d\n", 
+                rndtable[prndindex], filename, line, gametic);
+    }
+    
+    return rndtable[prndindex];
+}
+
+#else
+
 // Which one is deterministic?
 int P_Random (void)
 {
     prndindex = (prndindex+1)&0xff;
     return rndtable[prndindex];
 }
+
+#endif
 
 int M_Random (void)
 {

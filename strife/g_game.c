@@ -1,6 +1,7 @@
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
+// Copyright(C) 2014 Night Dive Studios, Inc.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -37,6 +38,8 @@
 #include "i_system.h"
 #include "i_timer.h"
 #include "i_video.h"
+#include "p_locations.h"
+#include "p_inter.h" // [SVE]
 #include "p_setup.h"
 #include "p_saveg.h"
 #include "p_tick.h"
@@ -67,6 +70,10 @@
 
 #include "g_game.h"
 
+// [SVE] svillarreal
+#include "i_joystick.h"
+#include "net_client.h"
+#include "hu_lib.h"
 
 #define SAVEGAMESIZE	0x2c000
 
@@ -155,7 +162,8 @@ fixed_t         forwardmove[2] = {0x19, 0x32};
 fixed_t         sidemove[2] = {0x18, 0x28}; 
 fixed_t         angleturn[3] = {640, 1280, 320};    // + slow turn 
 
-int mouse_fire_countdown = 0;    // villsa [STRIFE]
+// haleyjd 20140817: [SVE] remove gross mouse hack
+//int mouse_fire_countdown = 0;    // villsa [STRIFE]
 
 static int *weapon_keys[] = {
     &key_weapon1,
@@ -171,15 +179,33 @@ static int *weapon_keys[] = {
 // Set to -1 or +1 to switch to the previous or next weapon.
 
 static int next_weapon = 0;
+static int next_inv    = 0; // [SVE]
 
 // Used for prev/next weapon keys.
 // STRIFE-TODO: Check this table makes sense.
 
-static const struct
+// [SVE] This blows in Choco; doesn't work bidirectionally.
+typedef struct weaponorder_s
 {
     weapontype_t weapon;
     weapontype_t weapon_num;
-} weapon_order_table[] = {
+} weaponorder_t;
+
+static const weaponorder_t weapon_order_table_forward[] = {
+    { wp_fist,                  wp_fist },
+    { wp_elecbow,               wp_elecbow },
+    { wp_poisonbow,             wp_elecbow },
+    { wp_rifle,                 wp_rifle },
+    { wp_missile,               wp_missile },
+    { wp_hegrenade,             wp_hegrenade },
+    { wp_wpgrenade,             wp_hegrenade },
+    { wp_flame,                 wp_flame },
+    { wp_mauler,                wp_mauler },
+    { wp_torpedo,               wp_mauler },
+    { wp_sigil,                 wp_sigil },
+};
+
+static const weaponorder_t weapon_order_table_back[] = {
     { wp_fist,                  wp_fist },
     { wp_poisonbow,             wp_elecbow },
     { wp_elecbow,               wp_elecbow },
@@ -195,8 +221,8 @@ static const struct
 
 #define SLOWTURNTICS	6 
  
-#define NUMKEYS		256 
-#define MAX_JOY_BUTTONS 20
+#define NUMKEYS		512 // [SVE] svillarreal - increased to 512 to account for extra keys
+#define MAX_JOY_BUTTONS     NUM_VIRTUAL_BUTTONS
 
 static boolean  gamekeydown[NUMKEYS]; 
 static int      turnheld;		// for accelerative turning 
@@ -216,11 +242,17 @@ static boolean  dclickstate2;
 static int      dclicks2;
 
 // joystick values are repeated 
-static int      joyxmove;
-static int      joyymove;
+int             joyxmove;
+int             joyymove;
 static int      joystrafemove;
-static boolean  joyarray[MAX_JOY_BUTTONS + 1]; 
+static int      joylookmove;
+
+// [SVE] svillarreal - add by 14 to account for non-joystick buttons
+static boolean  joyarray[MAX_JOY_BUTTONS + 14 + 1];
+
 static boolean *joybuttons = &joyarray[1];		// allow [-1] 
+static float    joyturnthreshold = 0;
+static float    joylookthreshold = 0;
  
 static int      savegameslot = 6; // [STRIFE] initialized to 6
 static char     savedescription[32]; 
@@ -232,9 +264,9 @@ int      testcontrols_mousespeed;
 mobj_t*		bodyque[BODYQUESIZE]; 
 //int       bodyqueslot; [STRIFE] unused
  
-int             vanilla_savegame_limit = 1;
-int             vanilla_demo_limit = 1;
- 
+// haleyjd 20140831: [SVE] changed defaults
+int             vanilla_savegame_limit = 0;
+int             vanilla_demo_limit = 0;
 
 int G_CmdChecksum (ticcmd_t* cmd) 
 { 
@@ -270,8 +302,6 @@ static boolean WeaponSelectable(weapontype_t weapon)
     // Special rules for switching to alternate versions of weapons.
     // These must match the weapon-switching rules in P_PlayerThink()
 
-    // haleyjd 20141024: same fix here as in P_PlayerThink for torpedo.
-
     if (weapon == wp_torpedo
      && player->ammo[weaponinfo[wp_torpedo].ammo] < 30)
     {
@@ -290,6 +320,10 @@ static int G_NextWeapon(int direction)
 {
     weapontype_t weapon;
     int i;
+    // [SVE]: use a different table for walking backwards, so all weapons are
+    // selectable.
+    const weaponorder_t *table = 
+        direction > 0 ? weapon_order_table_forward : weapon_order_table_back;
 
     // Find index in the table.
 
@@ -302,9 +336,9 @@ static int G_NextWeapon(int direction)
         weapon = players[consoleplayer].pendingweapon;
     }
 
-    for (i=0; i<arrlen(weapon_order_table); ++i)
+    for (i=0; i<arrlen(weapon_order_table_forward); ++i)
     {
-        if (weapon_order_table[i].weapon == weapon)
+        if (table[i].weapon == weapon)
         {
             break;
         }
@@ -315,11 +349,21 @@ static int G_NextWeapon(int direction)
     do
     {
         i += direction;
-        i = (i + arrlen(weapon_order_table)) % arrlen(weapon_order_table);
-    } while (!WeaponSelectable(weapon_order_table[i].weapon));
+        i = (i + arrlen(weapon_order_table_forward)) % arrlen(weapon_order_table_forward);
+    } while (!WeaponSelectable(table[i].weapon));
 
-    return weapon_order_table[i].weapon_num;
+    return table[i].weapon_num;
 }
+
+extern int novert; // [SVE]
+
+// DEBUG
+//#define TICCMD_LOG
+#ifdef TICCMD_LOG
+#include <stdio.h>
+static FILE *ticcmd_log; // build log
+static FILE *runcmd_log; // run log
+#endif
 
 //
 // G_BuildTiccmd
@@ -339,6 +383,10 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
 
     memset(cmd, 0, sizeof(ticcmd_t));
 
+    // haleyjd [SVE]: clear joy move vars if automap is in non-follow mode
+    if(AM_MapInNonFollowMode())
+        joyxmove = joyymove = joystrafemove = joylookmove = 0;
+
     cmd->consistancy = 
         consistancy[consoleplayer][maketic%BACKUPTICS]; 
 
@@ -351,7 +399,7 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         cmd->buttons2 |= BT2_LOOKDOWN;
 
     // villsa [STRIFE] inventory use key
-    if(gamekeydown[key_invuse])
+    if(gamekeydown[key_invuse] || joybuttons[joybinvuse] || mousebuttons[mousebinvuse])
     {
         player_t* player = &players[consoleplayer];
         if(player->numinventory > 0)
@@ -362,7 +410,7 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     }
 
     // villsa [STRIFE] inventory drop key
-    if(gamekeydown[key_invdrop])
+    if(gamekeydown[key_invdrop] || joybuttons[joybinvdrop])
     {
         player_t* player = &players[consoleplayer];
         if(player->numinventory > 0)
@@ -384,15 +432,17 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     // fraggle: support the old "joyb_speed = 31" hack which
     // allowed an autorun effect
 
-    speed = key_speed >= NUMKEYS
-         || joybspeed >= MAX_JOY_BUTTONS
-         || gamekeydown[key_speed] 
-         || joybuttons[joybspeed];
+    speed = gamekeydown[key_speed] 
+         || joybuttons[joybspeed]
+         || autorun; // [SVE] imagine having a proper autorun setting?!
  
     forward = side = 0;
 
     // villsa [STRIFE] running causes centerview to occur
-    if(speed)
+    // [SVE] svillarreal - don't do this if not playing classic mode
+    // [SVE] haleyjd - also not if autorunning.
+    if((gamekeydown[key_centerview] || joybuttons[joybcenterview]) || 
+        (speed && classicmode && !autorun))
         cmd->buttons2 |= BT2_CENTERVIEW;
 
     // villsa [STRIFE] disable running if low on health
@@ -401,10 +451,7 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     
     // use two stage accelerative turning
     // on the keyboard and joystick
-    if (joyxmove < 0
-        || joyxmove > 0  
-        || gamekeydown[key_right]
-        || gamekeydown[key_left]) 
+    if(gamekeydown[key_right] || gamekeydown[key_left]) 
         turnheld += ticdup; 
     else 
         turnheld = 0; 
@@ -427,21 +474,12 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
             //	fprintf(stderr, "strafe left\n");
             side -= sidemove[speed]; 
         }
-        if (joyxmove > 0) 
-            side += sidemove[speed]; 
-        if (joyxmove < 0) 
-            side -= sidemove[speed]; 
-
     } 
     else 
     { 
         if (gamekeydown[key_right]) 
             cmd->angleturn -= angleturn[tspeed]; 
         if (gamekeydown[key_left]) 
-            cmd->angleturn += angleturn[tspeed]; 
-        if (joyxmove > 0) 
-            cmd->angleturn -= angleturn[tspeed]; 
-        if (joyxmove < 0) 
             cmd->angleturn += angleturn[tspeed]; 
     } 
 
@@ -456,23 +494,20 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         forward -= forwardmove[speed]; 
     }
 
-    if (joyymove < 0) 
-        forward += forwardmove[speed]; 
-    if (joyymove > 0) 
-        forward -= forwardmove[speed]; 
+    // [SVE] svillarreal
+    forward -= joyymove;
+    side += joystrafemove;
 
     if (gamekeydown[key_strafeleft]
      || joybuttons[joybstrafeleft]
-     || mousebuttons[mousebstrafeleft]
-     || joystrafemove < 0)
+     || mousebuttons[mousebstrafeleft])
     {
         side -= sidemove[speed];
     }
 
     if (gamekeydown[key_straferight]
      || joybuttons[joybstraferight]
-     || mousebuttons[mousebstraferight]
-     || joystrafemove > 0)
+     || mousebuttons[mousebstraferight])
     {
         side += sidemove[speed]; 
     }
@@ -492,10 +527,11 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     // villsa [STRIFE]
     if(mousebuttons[mousebfire])
     {
-         if(mouse_fire_countdown <= 0)
-             cmd->buttons |= BT_ATTACK;
-         else
-             --mouse_fire_countdown;
+         // haleyjd 20140817: [SVE] remove gross mouse hack
+         //if(mouse_fire_countdown <= 0)
+         cmd->buttons |= BT_ATTACK;
+         //else
+         //    --mouse_fire_countdown;
     }
  
     if (gamekeydown[key_use]
@@ -505,7 +541,17 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         cmd->buttons |= BT_USE;
         // clear double clicks if hit use button 
         dclicks = 0;
-    } 
+    }
+
+    // [SVE]: inventory scrolling
+    if(next_inv != 0)
+    {
+        if(next_inv < 0)
+            ST_InvLeft();
+        else
+            ST_InvRight();
+        next_inv = 0;
+    }
 
     // If the previous or next weapon button is pressed, the
     // next_weapon variable is set to change weapons when
@@ -599,21 +645,48 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         } 
     }
 
-    forward += mousey; 
+    // [SVE] svillarreal
+    if(!novert)
+    {
+        cmd->pitchmove += mouse_invert ? -mousey : mousey;
+    }
 
-    if (strafe) 
-        side += mousex*2; 
-    else 
+    // [SVE] svillarreal
+    cmd->pitchmove -= joylookmove;
+
+    if(strafe)
+    {
+        side += mousex*2;
+        side += joyxmove*2;
+    }
+    else
+    {
         cmd->angleturn -= mousex*0x8;
+        cmd->angleturn -= joyxmove*0x8;
+    }
 
-    if (mousex == 0)
+    if(mousex == 0)
     {
         // No movement in the previous frame
 
         testcontrols_mousespeed = 0;
     }
     
-    mousex = mousey = 0; 
+    mousex = mousey = 0;
+
+    // [SVE] svillarreal - reset threshold if stopped turning
+    if(joyxmove == 0)
+    {
+        joyturnthreshold = 0;
+    }
+
+    if(joylookmove == 0)
+    {
+        joylookthreshold = 0;
+    }
+
+    // [SVE] svillarreal - reset joy x/y here
+    joyxmove = joyymove = joystrafemove = joylookmove = 0;
 
     if (forward > MAXPLMOVE) 
         forward = MAXPLMOVE; 
@@ -659,18 +732,77 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
 
         carry = desired_angleturn - cmd->angleturn;
     }
+
+    // [SVE]: must encode local client's look range
+    if(use3drenderer && (cmd->pitchmove ||
+        (cmd->buttons2 & (BT2_CENTERVIEW|BT2_LOOKUP|BT2_LOOKDOWN))))
+        cmd->buttons2 |= BT2_LOOKRANGE;
+
+    // DEBUG
+#ifdef TICCMD_LOG
+    if(!ticcmd_log)
+        ticcmd_log = fopen("ticcmdlog.txt", "w");
+    if(ticcmd_log)
+    {
+        fprintf(ticcmd_log,
+            "%d:\n"
+            "\tangleturn = %d\n"
+            "\tarti = %d\n"
+            "\tbuttons = %d\n"
+            "\tbuttons2 = %d\n"
+            "\tchatchar = %c\n"
+            "\tconsistancy = %d\n"
+            "\tforwardmove = %d\n"
+            "\tinventory = %d\n"
+            "\tlookfly = %d\n"
+            "\tpitchmove = %d\n"
+            "\tsidemove = %d\n",
+            gametic,
+            cmd->angleturn, cmd->arti, cmd->buttons, cmd->buttons2, cmd->chatchar,
+            cmd->consistancy, cmd->forwardmove, cmd->inventory, cmd->lookfly,
+            cmd->pitchmove, cmd->sidemove);
+    }
+#endif
 } 
- 
+
+//
+// G_SetSkyTexture
+//
+// haleyjd 20140816: [SVE] Separated out of G_InitNew for bug fixes:
+// * Change when map changes
+// * For a modicum of consistency, also use the red sky on ANY map if the
+//   player possesses the Sigil in single player. Otherwise we have odd
+//   transitions from, eg., New Front Base to Tarnhill to Borderlands.
+//   This wasn't an issue with the bug in place, since it tended to mask
+//   the problem during individual play sessions.
+//
+void G_SetSkyTexture()
+{
+    char *skytexturename;
+
+    // [STRIFE] Strife skies (of which there are but two)
+    // [SVE] svillarreal - red sky for map35
+    if(((gamemap >= 9 && gamemap < 32) || gamemap == 35) ||
+        (!deathmatch && players[0].weaponowned[wp_sigil]))
+        skytexturename = "skymnt01";
+    else
+        skytexturename = "skymnt02";
+
+    skytexturename = DEH_String(skytexturename);
+
+    skytexture = R_TextureNumForName(skytexturename);
+}
 
 //
 // G_DoLoadLevel 
 //
-void G_DoLoadLevel (void) 
+void G_DoLoadLevel(void)
 { 
     int             i; 
 
-    // haleyjd 10/03/10: [STRIFE] This is not done here.
-    //skyflatnum = R_FlatNumForName(DEH_String(SKYFLATNAME));
+    // haleyjd 20140816: [SVE] Fix sky texture problems
+    if(!classicmode)
+        G_SetSkyTexture();
 
     levelstarttic = gametic;        // for time calculation
 
@@ -684,8 +816,12 @@ void G_DoLoadLevel (void)
         turbodetected[i] = false;
 
         // haleyjd 20110204 [STRIFE]: PST_REBORN if players[i].health <= 0
-        if (playeringame[i] && (players[i].playerstate == PST_DEAD || players[i].health <= 0))
+        // haleyjd 20141101 [SVE]: always reborn when leaving capture the chalice too
+        if(playeringame[i] && 
+           (players[i].playerstate == PST_DEAD || players[i].health <= 0 || capturethechalice))
+        {
             players[i].playerstate = PST_REBORN; 
+        }
         memset (players[i].frags,0,sizeof(players[i].frags)); 
     } 
 
@@ -698,7 +834,7 @@ void G_DoLoadLevel (void)
     // clear cmd building stuff
 
     memset (gamekeydown, 0, sizeof(gamekeydown));
-    joyxmove = joyymove = joystrafemove = 0;
+    joyxmove = joyymove = joystrafemove = joylookmove = 0;
     mousex = mousey = 0;
     sendpause = sendsave = paused = false;
     memset(mousearray, 0, sizeof(mousearray));
@@ -712,32 +848,41 @@ void G_DoLoadLevel (void)
     P_DialogLoad(); // villsa [STRIFE]
 } 
 
-static void SetJoyButtons(unsigned int buttons_mask)
+// [SVE] svillarreal
+static void SetJoyTurnThreshold(int turn, int look)
 {
-    int i;
+    float turnspeed = joystick_sensitivity / joystick_threshold;
 
-    for (i=0; i<MAX_JOY_BUTTONS; ++i)
+    if(turn == 0)
     {
-        int button_on = (buttons_mask & (1 << i)) != 0;
-
-        // Detect button press:
-
-        if (!joybuttons[i] && button_on)
-        {
-            // Weapon cycling:
-
-            if (i == joybprevweapon)
-            {
-                next_weapon = -1;
-            }
-            else if (i == joybnextweapon)
-            {
-                next_weapon = 1;
-            }
-        }
-
-        joybuttons[i] = button_on;
+        joyturnthreshold = 0;
     }
+    else
+    {
+        joyturnthreshold += turnspeed;
+
+        if(joyturnthreshold >= joystick_sensitivity)
+        {
+            joyturnthreshold = joystick_sensitivity;
+        }
+    }
+
+    if(look == 0)
+    {
+        joylookthreshold = 0;
+    }
+    else
+    {
+        joylookthreshold += turnspeed;
+
+        if(joylookthreshold >= joystick_sensitivity)
+        {
+            joylookthreshold = joystick_sensitivity;
+        }
+    }
+
+    joyxmove += (int)((float)turn * joyturnthreshold);
+    joylookmove += (int)((float)look * (joylookthreshold * 0.5f));
 }
 
 static void SetMouseButtons(unsigned int buttons_mask)
@@ -759,6 +904,16 @@ static void SetMouseButtons(unsigned int buttons_mask)
             else if (i == mousebnextweapon)
             {
                 next_weapon = 1;
+            }
+
+            // [SVE]: inventory scrolling
+            if(i == mousebinvprev)
+            {
+                next_inv = -1;
+            }
+            else if(i == mousebinvnext)
+            {
+                next_inv = 1;
             }
         }
 
@@ -792,7 +947,7 @@ boolean G_Responder (event_t* ev)
         ) 
     { 
         if (ev->type == ev_keydown ||  
-            (ev->type == ev_mouse && ev->data1) || 
+            (ev->type == ev_mousebutton && ev->data1) ||
             (ev->type == ev_joystick && ev->data1) ) 
         { 
             if(devparm && ev->data1 == 'g')
@@ -815,10 +970,14 @@ boolean G_Responder (event_t* ev)
 #endif 
         if (HU_Responder (ev)) 
             return true;	// chat ate the event 
-        if (ST_Responder (ev)) 
-            return true;	// status window ate it 
-        if (AM_Responder (ev)) 
-            return true;	// automap ate it 
+
+        if(!(paused || menuactive))
+        {
+            if (ST_Responder (ev)) 
+                return true;	// status window ate it 
+            if (AM_Responder (ev)) 
+                return true;	// automap ate it 
+        }
     } 
 
     if (gamestate == GS_FINALE) 
@@ -868,18 +1027,36 @@ boolean G_Responder (event_t* ev)
             gamekeydown[ev->data1] = false; 
         return false;   // always let key up events filter down 
 
-    case ev_mouse: 
+    case ev_mouse:
+        mousex = ev->data2*(mouseSensitivityX+5)/10; 
+        mousey = ev->data3*(mouseSensitivityY+5)/10; 
+        return true;    // eat events
+            
+    case ev_mousebutton:
         SetMouseButtons(ev->data1);
-        mousex = ev->data2*(mouseSensitivity+5)/10; 
-        mousey = ev->data3*(mouseSensitivity+5)/10; 
+        return true;
+
+    case ev_joystick:
+        SetJoyTurnThreshold(ev->data2, ev->data1);
+        joyymove = (int)((float)ev->data3 * 0.0015f);
+        joystrafemove = (int)((float)ev->data4 * 0.0015f);
         return true;    // eat events 
 
-    case ev_joystick: 
-        SetJoyButtons(ev->data1);
-        joyxmove = ev->data2; 
-        joyymove = ev->data3; 
-        joystrafemove = ev->data4;
-        return true;    // eat events 
+    case ev_joybtndown:
+        joybuttons[ev->data1] = 1;
+        if(ev->data1 == joybnextweapon)
+        {
+            next_weapon = 1;
+        }
+        else if(ev->data1 == joybprevweapon)
+        {
+            next_weapon = -1;
+        }
+        return true;
+
+    case ev_joybtnup:
+        joybuttons[ev->data1] = 0;
+        return true;
 
     default: 
         break; 
@@ -918,10 +1095,12 @@ void G_Ticker (void)
             G_DoLoadGame(true); 
             M_SaveMoveHereToMap(); // [STRIFE]
             M_ReadMisObj();
+            P_SetLocationsFromFile(savepathtemp);
             break; 
         case ga_savegame: 
             M_SaveMoveMapToHere(); // [STRIFE]
             M_SaveMisObj(savepath);
+            P_WriteActiveLocations(savepath);
             G_DoSaveGame(savepath); 
             break; 
         case ga_playdemo: 
@@ -938,7 +1117,9 @@ void G_Ticker (void)
             break; 
         case ga_screenshot: 
             V_ScreenShot("STRIFE%02i.%s"); // [STRIFE] file name, message
-            players[consoleplayer].message = DEH_String("STRIFE  by Rogue entertainment");
+            // [SVE]: no message in screenshots
+            //players[consoleplayer].message = DEH_String("STRIFE  by Rogue entertainment");
+            S_StartSound(NULL, sfx_radio);
             gameaction = ga_nothing; 
             break; 
         case ga_nothing: 
@@ -959,6 +1140,32 @@ void G_Ticker (void)
             cmd = &players[i].cmd; 
 
             memcpy (cmd, &netcmds[i], sizeof(ticcmd_t)); 
+
+            // DEBUG
+#ifdef TICCMD_LOG
+            if(!runcmd_log)
+                runcmd_log = fopen("runcmdlog.txt", "w");
+            if(runcmd_log)
+            {
+                fprintf(runcmd_log,
+                    "%d/%d:\n"
+                    "\tangleturn = %d\n"
+                    "\tarti = %d\n"
+                    "\tbuttons = %d\n"
+                    "\tbuttons2 = %d\n"
+                    "\tchatchar = %c\n"
+                    "\tconsistancy = %d\n"
+                    "\tforwardmove = %d\n"
+                    "\tinventory = %d\n"
+                    "\tlookfly = %d\n"
+                    "\tpitchmove = %d\n"
+                    "\tsidemove = %d\n",
+                    gametic, i,
+                    cmd->angleturn, cmd->arti, cmd->buttons, cmd->buttons2, cmd->chatchar,
+                    cmd->consistancy, cmd->forwardmove, cmd->inventory, cmd->lookfly,
+                    cmd->pitchmove, cmd->sidemove);
+            }
+#endif
 
             if (demoplayback)
                 G_ReadDemoTiccmd (cmd); 
@@ -983,11 +1190,14 @@ void G_Ticker (void)
                 && turbodetected[i])
             {
                 static char turbomessage[80];
-                extern char player_names[8][16];
+                // [SVE]: display pretty player name
+                char *prettyName = HUlib_makePrettyPlayerName(i);
                 M_snprintf(turbomessage, sizeof(turbomessage),
-                           "%s is turbo!", player_names[i]);
+                           "%s is turbo!", prettyName);
+
                 players[consoleplayer].message = turbomessage;
                 turbodetected[i] = false;
+                Z_Free(prettyName);
             }
 
             if (netgame && !netdemo && !(gametic%ticdup) ) 
@@ -995,7 +1205,7 @@ void G_Ticker (void)
                 if (gametic > BACKUPTICS 
                     && consistancy[i][buf] != cmd->consistancy) 
                 { 
-                    I_Error ("consistency failure (%i should be %i)",
+                    I_Error ("Consistency failure (%i should be %i)",
                              cmd->consistancy, consistancy[i][buf]); 
                 } 
                 if (players[i].mo) 
@@ -1038,15 +1248,6 @@ void G_Ticker (void)
         }
     }
 
-    // Have we just finished displaying an intermission screen?
-    // haleyjd 08/23/10: [STRIFE] No intermission.
-    /*
-    if (oldgamestate == GS_INTERMISSION && gamestate != GS_INTERMISSION)
-    {
-        WI_End();
-    }
-    */
-
     oldgamestate = gamestate;
 
     // do main actions
@@ -1059,12 +1260,12 @@ void G_Ticker (void)
         HU_Ticker ();
         break; 
 
-        // haleyjd 08/23/10: [STRIFE] No intermission.
-        /*
+    // haleyjd 08/23/10: [STRIFE] No intermission.
+    // haleyjd 20140921: [SVE] For Capture the Chalice
     case GS_INTERMISSION: 
         WI_Ticker (); 
         break; 
-        */
+
     case GS_UNKNOWN: // STRIFE-TODO: What is this? is it ever used??
         F_WaitTicker();
         break;
@@ -1168,6 +1369,9 @@ void G_PlayerReborn (int player)
     p->allegiance            = allegiance;           // villsa [STRIFE]
     p->centerview            = true;                 // villsa [STRIFE]
 
+    // [SVE] svillarreal
+    p->recoilpitch           = 0;
+
     for(i = 0; i < NUMAMMO; i++) 
         p->maxammo[i] = maxammo[i]; 
 
@@ -1178,6 +1382,9 @@ void G_PlayerReborn (int player)
     // villsa [STRIFE]: Default objective
     M_StringCopy(mission_objective, DEH_String("Find help"),
                  OBJECTIVE_LEN);
+
+    // [SVE] svillarreal - set default objective location
+    P_SetLocationsFromScript("LOC0");
 }
 
 //
@@ -1253,23 +1460,44 @@ G_CheckSpot
 // called at level load and each death 
 //
 // [STRIFE]: Modified exit message to match binary.
+// [SVE]: Capture the Chalice support
 //
 void G_DeathMatchSpawnPlayer (int playernum) 
 { 
-    int             i,j; 
-    int             selections; 
+    int i, j; 
+    int selections;
+    mapthing_t *spots;
 
-    selections = deathmatch_p - deathmatchstarts; 
-    if (selections < 4) 
-        I_Error ("Only %i deathmatch spots, at least 4 required!", selections); 
+    // haleyjd 20140819: [SVE] rem dmspots limit
+    // haleyjd 20140917: [SVE] Capture the Chalice
+    if(capturethechalice)
+    {
+        player_t *player = &players[playernum];
+        // assign player to a CTC team at beginning of the level
+        if(!leveltime)
+            P_AssignPlayerToTeam(player);
 
-    for (j=0 ; j<20 ; j++) 
+        // 8 of each spot type are required, for extra safety
+        selections = player->allegiance == CTC_TEAM_BLUE ? numctcbluestarts : numctcredstarts;
+        spots      = player->allegiance == CTC_TEAM_BLUE ? ctcbluestarts    : ctcredstarts;
+        if(selections < 8)
+            I_Error("Only %i Capture the Chalice spots, at least 8 required!", selections);
+    }
+    else
+    {
+       selections = numdeathmatchstarts;
+       spots      = deathmatchstarts;
+       if(selections < 4) 
+          I_Error ("Only %i deathmatch spots, at least 4 required!", selections); 
+    }
+
+    for(j = 0; j < 20; j++) 
     { 
         i = P_Random() % selections; 
-        if (G_CheckSpot (playernum, &deathmatchstarts[i]) ) 
+        if(G_CheckSpot(playernum, &spots[i])) 
         { 
-            deathmatchstarts[i].type = playernum+1; 
-            P_SpawnPlayer (&deathmatchstarts[i]); 
+            spots[i].type = playernum+1; 
+            P_SpawnPlayer(&spots[i]); 
             return; 
         } 
     } 
@@ -1368,6 +1596,32 @@ void G_ScreenShot (void)
 extern char*	pagename; 
 
 //
+// G_RemovePrisoners
+//
+// haleyjd 20141108: [SVE] Remove prisoners when exiting the prison after
+// having freed them.
+//
+static void G_RemovePrisoners(void)
+{
+    thinker_t *th;
+
+    for(th = thinkercap.next; th != &thinkercap; th = th->next)
+    {
+        if(th->function.acp1 == (actionf_p1)P_MobjThinker)
+        {
+            mobj_t *mo = (mobj_t *)th;
+            mapdialog_t *md = P_DialogFind(mo->type, 0);
+            
+            if(mo->health <= 0)
+                continue;
+
+            if(!strncasecmp(md->name, "Prisoner", MDLG_NAMELEN))
+                P_RemoveMobj(mo);
+        }
+    }
+}
+
+//
 // G_RiftExitLevel
 //
 // haleyjd 20100824: [STRIFE] New function
@@ -1377,6 +1631,14 @@ extern char*	pagename;
 void G_RiftExitLevel(int map, int spot, angle_t angle)
 {
     gameaction = ga_completed;
+
+    // [SVE]: when exiting from the Prison and have freed 
+    // the prisoners, remove the prisoners
+    if(!deathmatch && !classicmode && gamemap == 5 && 
+        players[0].questflags & QF_QUEST13)
+    {
+        G_RemovePrisoners();
+    }
     
     // special handling for post-Sigil map changes
     if(players[0].weaponowned[wp_sigil])
@@ -1417,10 +1679,42 @@ void G_Exit2(int dest, angle_t angle)
 // haleyjd 20100824: [STRIFE]:
 // * Default to next map in numeric order; init destmap and riftdest.
 //
-void G_ExitLevel (int dest) 
+void G_ExitLevel(int dest) 
 {
+    char mapname[9];
+    
+    // [SVE]: don't go past last map present amongst loaded wads
     if(dest == 0)
-        dest = gamemap + 1;
+    {
+        int times = 0;
+        do
+        {
+            switch(times)
+            {
+            case 0:
+                dest = gamemap + 1;  // try next map in numeric order
+                if(!capturethechalice && dest == 36)
+                    dest = 1; // don't enter CTC from non-CTC maps
+                break;
+            case 1:
+                if(capturethechalice)
+                    dest = 36;       // CTC rotation
+                else
+                    dest = gamemap;  // return to same map
+                break;
+            case 2:
+                dest = gamemap;      // return to same map
+                break;
+            default:
+                // This should be unreachable...
+                I_Error("G_ExitLevel: no level to exit into!");
+            }
+            M_snprintf(mapname, sizeof(mapname), "MAP%02d", dest);
+            ++times;
+        }
+        while(W_CheckNumForName(mapname) < 0);
+    }
+    
     destmap = dest;
     riftdest = 0;
     gameaction = ga_completed; 
@@ -1464,7 +1758,7 @@ void G_StartFinale(void)
 // * Removed intermission code.
 // * Added setting gameaction to ga_worlddone.
 //
-void G_DoCompleted (void) 
+void G_DoCompleted(void) 
 {
     int i;
 
@@ -1492,40 +1786,28 @@ void G_DoCompleted (void)
     if(!deathmatch)
         G_DoSaveGame(savepathtemp);
     
-    gameaction = ga_worlddone;
+    // [SVE]: Capture the Chalice intermission
+    if(capturethechalice)
+    {
+        wminfo.next = destmap;
+        wminfo.numplayers = WI_NumPlayers();
+        wminfo.numblue    = WI_PlayersOnTeam(CTC_TEAM_BLUE);
+        wminfo.numred     = WI_PlayersOnTeam(CTC_TEAM_RED);
+        WI_Start(&wminfo);
+    }
+    else
+        gameaction = ga_worlddone;
 } 
 
-
-// haleyjd 20100824: [STRIFE] No secret exits.
-/*
 //
 // G_WorldDone 
 //
-void G_WorldDone (void) 
+// haleyjd 20140921: [SVE] Used for Capture the Chalice mode
+//
+void G_WorldDone(void) 
 { 
     gameaction = ga_worlddone; 
-
-    if (secretexit) 
-        players[consoleplayer].didsecret = true; 
-
-    if ( gamemode == commercial )
-    {
-	switch (gamemap)
-	{
-	  case 15:
-	  case 31:
-	    if (!secretexit)
-		break;
-	  case 6:
-	  case 11:
-	  case 20:
-	  case 30:
-	    F_StartFinale ();
-	    break;
-	}
-    }
 } 
-*/
 
 //
 // G_RiftPlayer
@@ -1542,6 +1824,11 @@ void G_RiftPlayer(void)
                        riftSpots[riftdest - 1].y << FRACBITS);
         players[0].mo->angle  = riftangle;
         players[0].mo->health = players[0].health;
+
+        // haleyjd [SVE]: set viewz for interpolation reasons
+        players[0].viewz = players[0].mo->z + players[0].viewheight;
+        players[0].prevviewz = players[0].viewz;
+        players[0].prevpitch = players[0].pitch;
     }
 }
 
@@ -1553,9 +1840,24 @@ void G_RiftPlayer(void)
 //
 boolean G_RiftCheat(int riftSpotNum)
 {
-    return P_TeleportMove(players[0].mo,
-                          riftSpots[riftSpotNum - 1].x << FRACBITS,
-                          riftSpots[riftSpotNum - 1].y << FRACBITS);
+    boolean result;
+
+    // [SVE]: don't scoot to uninitialized spots
+    if(!riftSpotInit[riftSpotNum - 1])
+        return false;
+
+    result = P_TeleportMove(players[0].mo,
+                            riftSpots[riftSpotNum - 1].x << FRACBITS,
+                            riftSpots[riftSpotNum - 1].y << FRACBITS);
+    if(result)
+    {
+        // haleyjd [SVE]: set viewz for interpolation reasons
+        players[0].viewz = players[0].mo->z + players[0].viewheight;
+        players[0].prevviewz = players[0].viewz;
+        players[0].prevpitch = players[0].pitch;
+    }
+
+    return result;
 }
 
 //
@@ -1600,6 +1902,7 @@ void G_DoWorldDone (void)
         G_RiftPlayer();
         G_DoSaveGame(savepathtemp);
         M_SaveMisObj(savepathtemp);
+        P_WriteActiveLocations(savepathtemp);
     }
 
     gameaction = ga_nothing; 
@@ -1632,7 +1935,7 @@ void G_ReadCurrent(const char *path)
 
     temppath = M_SafeFilePath(path, "\\current");
 
-    if(M_ReadFile(temppath, &buffer) <= 0)
+    if(M_ReadFile(temppath, &buffer) < 4) // [SVE]: ensure 4 bytes at least.
         gameaction = ga_newgame;
     else
     {
@@ -1671,28 +1974,307 @@ void G_LoadGame (char* name)
 // haleyjd 20100928: [STRIFE] VERSIONSIZE == 8
 #define VERSIONSIZE             8
 
-void G_DoLoadGame (boolean userload) 
+//
+// G_HasVisitedMap
+//
+// [SVE]: Check if the player has visited a given map.
+//
+static boolean G_HasVisitedMap(int mapnum)
+{
+    char mapbuf[33];
+    char *temppath;
+    boolean res;
+
+    M_Itoa(mapnum, mapbuf, 10);
+
+    temppath = M_SafeFilePath(savepathtemp, mapbuf);
+    res = M_FileExists(temppath);
+    Z_Free(temppath);
+
+    return res;
+}
+
+//
+// G_GiveRebornItem
+//
+static void G_GiveRebornItem(int type)
+{
+    P_GiveItemToPlayer(&players[0], states[mobjinfo[type].spawnstate].sprite, type);
+}
+
+//
+// G_SpecialReborn
+//
+// haleyjd 20141122: [SVE] Give the player status equivalent to his progess
+// if a save file load fails.
+//
+static void G_SpecialReborn(void)
+{
+    // Sanctuary
+    if(G_HasVisitedMap(1))
+    {
+        players[0].questflags |= QF_QUEST1;
+        G_GiveRebornItem(MT_TOKEN_RING);
+        G_GiveRebornItem(MT_INV_COMMUNICATOR);
+        G_GiveRebornItem(MT_KEY_BASE);
+        G_GiveRebornItem(MT_INV_ARMOR1);
+        P_GiveWeapon(&players[0], wp_elecbow, false);
+    }
+
+    // Front Base
+    if(G_HasVisitedMap(3))
+    {
+        players[0].questflags |= QF_QUEST3|QF_QUEST10|QF_QUEST11;
+        G_GiveRebornItem(MT_MONY_300);
+        G_GiveRebornItem(MT_GOVSKEY);
+        G_GiveRebornItem(MT_KEY_TRAVEL);
+        G_GiveRebornItem(MT_PRISONKEY);
+    }
+
+    // Power Station
+    if(G_HasVisitedMap(4))
+    {
+        players[0].questflags |= QF_QUEST4|QF_QUEST14;
+        G_GiveRebornItem(MT_MONY_300);
+        G_GiveRebornItem(MT_INV_SUIT);
+        G_GiveRebornItem(MT_INV_ARMOR2);
+        G_GiveRebornItem(MT_POWER1KEY);
+        G_GiveRebornItem(MT_POWER2KEY);
+        G_GiveRebornItem(MT_POWER3KEY);
+        G_GiveRebornItem(MT_KEY_GOLD);
+        P_GiveWeapon(&players[0], wp_missile, false);
+        players[0].accuracy += 10;
+        players[0].stamina  += 10;
+    }
+
+    // Prison
+    if(G_HasVisitedMap(5))
+    {
+        players[0].questflags |= QF_QUEST12|QF_QUEST13;
+        G_GiveRebornItem(MT_MONY_300);
+        G_GiveRebornItem(MT_KEY_HAND);
+        G_GiveRebornItem(MT_KEY_ID_BLUE);
+        G_GiveRebornItem(MT_INV_SATCHEL);
+        P_GiveWeapon(&players[0], wp_rifle, false);
+        players[0].accuracy += 10;
+        players[0].stamina  += 10;
+    }
+
+    // Sewers
+    if(G_HasVisitedMap(6))
+    {
+        players[0].questflags |= QF_QUEST15;
+        G_GiveRebornItem(MT_QUEST_UNIFORM);
+        G_GiveRebornItem(MT_TOKEN_FLAME_THROWER_PARTS);
+        P_GiveWeapon(&players[0], wp_hegrenade, false);
+        players[0].accuracy += 10;
+        players[0].stamina  += 10;
+    }
+
+    // Castle
+    if(G_HasVisitedMap(7))
+    {
+        players[0].questflags |= QF_QUEST16;
+        G_GiveRebornItem(MT_MONY_300);
+    }
+
+    // Audience Chamber
+    if(G_HasVisitedMap(8))
+    {
+        G_GiveRebornItem(MT_KEY_SILVER);
+    }
+
+    // New Front Base
+    if(G_HasVisitedMap(10))
+    {
+        players[0].questflags |= QF_QUEST17;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 0)
+            players[0].sigiltype = 0;
+        G_GiveRebornItem(MT_MONY_300);
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    // Borderlands
+    if(G_HasVisitedMap(11))
+    {
+        G_GiveRebornItem(MT_KEY_ORACLE);
+    }
+
+    // Oracle
+    if(G_HasVisitedMap(12))
+    {
+        players[0].questflags |= QF_QUEST18;
+        G_GiveRebornItem(MT_MILITARYID);
+        G_GiveRebornItem(MT_KEY_ORDER);
+        G_GiveRebornItem(MT_QUEST_GUARD_UNIFORM);
+    }
+
+    // Mines
+    if(G_HasVisitedMap(14))
+    {
+        players[0].questflags |= QF_QUEST29;
+        G_GiveRebornItem(MT_DEGNINORE);
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    // Fortress: Admin.
+    if(G_HasVisitedMap(15))
+        players[0].questflags |= QF_QUEST27;
+
+    // Fortress: Bishop's Tower
+    if(G_HasVisitedMap(16))
+    {
+        players[0].questflags |= QF_QUEST21|QF_QUEST22|QF_QUEST23;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 1)
+            players[0].sigiltype = 1;
+    }
+
+    // Fortress: Bailey
+    if(G_HasVisitedMap(17))
+        G_GiveRebornItem(MT_KEY_WAREHOUSE);
+
+    // Fortress: Stores
+    if(G_HasVisitedMap(18))
+    {
+        G_GiveRebornItem(MT_KEY_MAULER);
+        P_GiveWeapon(&players[0], wp_mauler, false);
+    }
+
+    // Order Commons
+    if(G_HasVisitedMap(23))
+    {
+        players[0].questflags |= QF_QUEST24;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 2)
+            players[0].sigiltype = 2;
+        G_GiveRebornItem(MT_KEY_BRASS);
+        G_GiveRebornItem(MT_CATACOMBKEY);
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    // Factory: Conversion Chapel
+    if(G_HasVisitedMap(24))
+    {
+        players[0].questflags |= QF_QUEST25;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 3)
+            players[0].sigiltype = 3;
+        G_GiveRebornItem(MT_KEY_RED_CRYSTAL);
+        G_GiveRebornItem(MT_KEY_BLUE_CRYSTAL);
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    // Catacombs: Ruins
+    if(G_HasVisitedMap(25))
+    {
+        players[0].questflags |= QF_QUEST28;
+        G_GiveRebornItem(MT_KEY_CHAPEL);
+        G_GiveRebornItem(MT_KEY_FACTORY);
+        G_GiveRebornItem(MT_KEY_MINE);
+    }
+
+    // Factory: Proving Grounds
+    if(G_HasVisitedMap(26))
+    {
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 2)
+            players[0].sigiltype = 2;
+    }
+
+    // Lab
+    if(G_HasVisitedMap(27))
+    {
+        players[0].questflags |= QF_QUEST26;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 4)
+            players[0].sigiltype = 4;
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    // Ship
+    if(G_HasVisitedMap(28))
+    {
+        players[0].questflags = QF_ALLQUESTS;
+        players[0].weaponowned[wp_sigil] = true;
+        if(players[0].sigiltype < 4)
+            players[0].sigiltype = 4;
+    }
+
+    // Training Facility
+    if(G_HasVisitedMap(31))
+    {
+        players[0].stamina  += 10;
+        players[0].accuracy += 10;
+    }
+
+    if(players[0].stamina > 90)
+        players[0].stamina = 90;
+    if(players[0].accuracy > 90)
+        players[0].accuracy = 90;
+
+    P_GiveBody(&players[0], 200);
+
+    // achievements are disabled on this file, sorry :/
+    HU_NotifyCheating(&players[0]);
+}
+
+//
+// G_HandleLoadError
+//
+// haleyjd 20141122: [SVE] Handle load game errors gracefully
+//
+static void G_HandleLoadError(FILE *save_stream, boolean userload)
+{
+    if(save_stream)
+        fclose(save_stream);
+
+    if(userload)
+    {
+        G_InitNew(gameskill, gamemap);
+        G_SpecialReborn();
+    }
+    else
+        G_DoLoadLevel();
+
+    players[0].message = "WARNING: Could not load save file";
+}
+
+void G_DoLoadGame(boolean userload) 
 {
     int savedleveltime;
+    skill_t savedcurskill; // haleyjd: [SVE] fix skill level issue with saves
+    skill_t newskill;
 
     gameaction = ga_nothing;
 
     save_stream = fopen(loadpath, "rb");
 
     // [STRIFE] If the file does not exist, G_DoLoadLevel is called.
-    if (save_stream == NULL)
+    if(save_stream == NULL)
     {
         G_DoLoadLevel();
         return;
     }
 
     savegame_error = false;
+    savedcurskill  = gameskill;
 
-    if (!P_ReadSaveGameHeader())
+    if(!P_ReadSaveGameHeader())
     {
-        fclose(save_stream);
+        G_HandleLoadError(save_stream, userload);
         return;
     }
+
+    // haleyjd 20140816: [SVE] Fix savegame skill glitch
+    newskill  = gameskill;
+    gameskill = savedcurskill;
 
     // haleyjd: A comment would be good here, fraggle...
     // Evidently this is a Choco-ism, necessitated by reading the savegame
@@ -1701,9 +2283,9 @@ void G_DoLoadGame (boolean userload)
     
     // load a base level
 
-    // STRIFE-TODO: ????
+    // [STRIFE]: hubs vs user loaded saves
     if(userload)
-        G_InitNew(gameskill, gamemap); 
+        G_InitNew(newskill, gamemap); 
     else
         G_DoLoadLevel();
  
@@ -1714,11 +2296,38 @@ void G_DoLoadGame (boolean userload)
     //   between hub levels
     P_UnArchivePlayers (userload); 
     P_UnArchiveWorld (); 
+
+    // [SVE]: error check
+    if(savegame_error)
+    {
+        G_HandleLoadError(save_stream, userload);
+        return;
+    }
+
     P_UnArchiveThinkers (); 
+
+    // [SVE]: error check
+    if(savegame_error)
+    {
+        G_HandleLoadError(save_stream, userload);
+        return;
+    }
+
     P_UnArchiveSpecials (); 
+
+    // [SVE]: error check
+    if(savegame_error)
+    {
+        G_HandleLoadError(save_stream, userload);
+        return;
+    }
  
-    if (!P_ReadSaveGameEOF())
-        I_Error ("Bad savegame");
+    if(!P_ReadSaveGameEOF())
+    {
+        // [SVE]
+        G_HandleLoadError(save_stream, userload);
+        return;
+    }
 
     fclose(save_stream);
     
@@ -1727,6 +2336,10 @@ void G_DoLoadGame (boolean userload)
     
     // draw the pattern into the back screen
     R_FillBackScreen ();
+
+    // [SVE]
+    if(players[0].cheats & CF_CHEATING)
+        HU_NotifyCheating(NULL);
 } 
 
 //
@@ -1906,57 +2519,35 @@ void G_DeferedInitNew(skill_t skill, int map)
 //
 void G_DoNewGame (void) 
 {
+    int i;
+
     demoplayback = false; 
     netdemo = false;
     netgame = false;
     deathmatch = false;
     playeringame[1] = playeringame[2] = playeringame[3] = 0;
-    respawnparm = false;
-    fastparm = false;
+    respawnparm = start_respawnparm; // haleyjd [SVE]: reset to startup state
+    fastparm = start_fastparm;
     stonecold = false;      // villsa [STRIFE]
     //nomonsters = false;   [STRIFE] not set here!?!
     consoleplayer = 0;
     G_InitNew (d_skill, d_map);
     gameaction = ga_nothing; 
+
+    // [SVE] svillarreal
+    for(i = 0; i < MAXPLAYERS; ++i)
+        players[i].secretcount = 0;
 } 
 
 //
-// G_InitNew
+// G_AdjustMobjInfoForSkill
 //
-// haleyjd 20100824: [STRIFE]:
-// * Added riftdest initialization
-// * Removed episode parameter
+// haleyjd 20140816: Separated out of G_InitNew to fix bugs.
 //
-void
-G_InitNew
-( skill_t       skill,
-  int           map ) 
-{ 
-    char *skytexturename;
-    int             i; 
+void G_AdjustMobjInfoForSkill(skill_t skill)
+{
+    int i;
 
-    if (paused) 
-    { 
-        paused = false; 
-        S_ResumeSound (); 
-    } 
-
-    if (skill > sk_nightmare) 
-        skill = sk_nightmare;
-
-    // [STRIFE] Removed episode nonsense and gamemap clipping
-
-    M_ClearRandom (); 
-
-    if (skill == sk_nightmare || respawnparm )
-        respawnmonsters = true;
-    else
-        respawnmonsters = false;
-
-    // [STRIFE] Strife skill level mobjinfo/states tweaking
-    // BUG: None of this code runs properly when loading save games, so
-    // basically it's impossible to play any skill level properly unless
-    // you never quit and reload from the command line.
     if(!skill && gameskill)
     {
         // Setting to Baby skill... make things easier.
@@ -1982,7 +2573,11 @@ G_InitNew
             states[i].tics *= 2;
 
         // The Bishop's homing missiles are faster (what?? BUG?)
-        mobjinfo[MT_SEEKMISSILE].speed *= 2;
+        // haleyjd 20140816: [SVE] Fix conditional on classicmode
+        if(classicmode)
+            mobjinfo[MT_SEEKMISSILE].speed *= 2;
+        else
+            mobjinfo[MT_SEEKMISSILE].speed /= 2;
     }
     if(skill && !gameskill)
     {
@@ -2009,7 +2604,11 @@ G_InitNew
             states[i].tics >>= 1;
 
         // The Bishop's homing missiles - again, seemingly backward.
-        mobjinfo[MT_SEEKMISSILE].speed >>= 1;
+        // haleyjd 20140816: [SVE] Fix conditional on classicmode
+        if(classicmode)
+            mobjinfo[MT_SEEKMISSILE].speed /= 2;
+        else
+            mobjinfo[MT_SEEKMISSILE].speed *= 2;
     }
     if(fastparm || (skill == sk_nightmare && skill != gameskill))
     {
@@ -2021,7 +2620,11 @@ G_InitNew
             states[i].tics >>= 1;
 
         // Bishop's homing missiles again get SLOWER and not faster o_O
-        mobjinfo[MT_SEEKMISSILE].speed >>= 1;
+        // haleyjd 20140816: [SVE] Fix conditional on classicmode
+        if(classicmode)
+            mobjinfo[MT_SEEKMISSILE].speed /= 2;
+        else
+            mobjinfo[MT_SEEKMISSILE].speed *= 2;
     }
     else if(skill != sk_nightmare && gameskill == sk_nightmare)
     {
@@ -2033,8 +2636,48 @@ G_InitNew
             states[i].tics *= 2;
 
         // Bishop's homing missiles
-        mobjinfo[MT_SEEKMISSILE].speed *= 2;
+        // haleyjd 20140816: [SVE] Fix conditional on classicmode
+        if(classicmode)
+            mobjinfo[MT_SEEKMISSILE].speed *= 2;
+        else
+            mobjinfo[MT_SEEKMISSILE].speed /= 2;
     }
+}
+
+//
+// G_InitNew
+//
+// haleyjd 20100824: [STRIFE]:
+// * Added riftdest initialization
+// * Removed episode parameter
+//
+void
+G_InitNew
+( skill_t       skill,
+  int           map ) 
+{ 
+    int             i; 
+
+    if (paused) 
+    { 
+        paused = false; 
+        S_ResumeSound (); 
+    } 
+
+    if (skill > sk_nightmare) 
+        skill = sk_nightmare;
+
+    // [STRIFE] Removed episode nonsense and gamemap clipping
+
+    M_ClearRandom (); 
+
+    if (skill == sk_nightmare || respawnparm )
+        respawnmonsters = true;
+    else
+        respawnmonsters = false;
+
+    // [STRIFE] Strife skill level mobjinfo/states tweaking
+    G_AdjustMobjInfoForSkill(skill);
 
     // force players to be initialized upon first level load
     for (i=0 ; i<MAXPLAYERS ; i++) 
@@ -2060,15 +2703,8 @@ G_InitNew
     // restore from a saved game.  This was fixed before the Doom
     // source release, but this IS the way Vanilla DOS Doom behaves.
 
-    // [STRIFE] Strife skies (of which there are but two)
-    if(gamemap >= 9 && gamemap < 32)
-        skytexturename = "skymnt01";
-    else
-        skytexturename = "skymnt02";
-
-    skytexturename = DEH_String(skytexturename);
-
-    skytexture = R_TextureNumForName(skytexturename);
+    // haleyjd 20140816: [SVE] fix for Veteran Edition
+    G_SetSkyTexture();
 
     // [STRIFE] HUBS
     G_LoadPath(gamemap);
@@ -2436,8 +3072,8 @@ boolean G_CheckDemoStatus (void)
         netgame = false;
         deathmatch = false;
         playeringame[1] = playeringame[2] = playeringame[3] = 0;
-        respawnparm = false;
-        fastparm = false;
+        respawnparm = start_respawnparm; // [SVE] reset to start state
+        fastparm = start_fastparm;
         nomonsters = false;
         consoleplayer = 0;
         
